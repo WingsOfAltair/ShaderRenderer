@@ -108,6 +108,7 @@ App::App()
       time(0.0f),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       hintTimer(0.0f), showHint(false),
+      showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
       VAO(0), VBO(0), computeTexture(0), selectedPreset(""), newPresetName("")
 {
 }
@@ -288,11 +289,41 @@ void App::renderUI()
         ImGui::EndMainMenuBar();
     }
 
+        // Compile error popup (shows for 5 seconds, allows copying)
+    if (showCompileErrorPopup) {
+        compileErrorPopupTimer += 0.016f;
+        if (compileErrorPopupTimer >= 10.0f) {
+            showCompileErrorPopup = false;
+            compileErrorPopupTimer = 0.0f;
+        }
+    }
+
     // Hint popup
     if (showHint) {
         ImGui::SetNextWindowPos(ImVec2(10, 60), ImGuiCond_Always);
         ImGui::Begin("Hint", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize);
         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s", hintMessage.c_str());
+        ImGui::End();
+    }
+
+    // Compile error popup
+    if (showCompileErrorPopup) {
+        ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x / 2.0f, ImGui::GetIO().DisplaySize.y / 2.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(500, 300));
+        if (ImGui::Begin("Shader Compilation Error", &showCompileErrorPopup, ImGuiWindowFlags_None)) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Compilation failed. The popup will close in %.0f seconds", 5.0f - compileErrorPopupTimer);
+            ImGui::Separator();
+            ImGui::TextWrapped("%s", compileErrorPopupMessage.c_str());
+            ImGui::Separator();
+            if (ImGui::Button("Copy to Clipboard", ImVec2(-1, 0))) {
+                ImGui::SetClipboardText(compileErrorPopupMessage.c_str());
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Close", ImVec2(-1, 0))) {
+                showCompileErrorPopup = false;
+                compileErrorPopupTimer = 0.0f;
+            }
+        }
         ImGui::End();
     }
 
@@ -435,6 +466,7 @@ void App::renderUI()
 void App::compileShader()
 {
     compileError.clear();
+    compileErrorPopupMessage.clear();
 
     if (shader.compile(vertexCode, fragmentCode, compileError)) {
         shaderValid = true;
@@ -442,7 +474,9 @@ void App::compileShader()
         std::cout << "Shader compiled successfully!" << std::endl;
     } else {
         shaderValid = false;
-        hintMessage = "Shader reload failed:\n" + compileError;
+        compileErrorPopupMessage = "Shader compilation failed:\n" + compileError;
+        showCompileErrorPopup = true;
+        compileErrorPopupTimer = 0.0f;
         std::cerr << "Shader compilation failed: " << compileError << std::endl;
     }
 }
@@ -465,6 +499,7 @@ static std::string extractFirstShaderStage(const std::string& source)
 bool App::compileComputeShader()
 {
     computeCompileError.clear();
+    compileErrorPopupMessage.clear();
     std::string computeSource = extractFirstShaderStage(computeCode);
 
     if (computeShader.compileCompute(computeSource, computeCompileError)) {
@@ -474,7 +509,9 @@ bool App::compileComputeShader()
         return true;
     } else {
         computeValid = false;
-        hintMessage = "Compute shader compile failed:\n" + computeCompileError;
+        compileErrorPopupMessage = "Compute shader compilation failed:\n" + computeCompileError;
+        showCompileErrorPopup = true;
+        compileErrorPopupTimer = 0.0f;
         std::cerr << "Compute shader compilation failed: " << computeCompileError << std::endl;
         return false;
     }

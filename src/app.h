@@ -77,6 +77,9 @@ private:
     float hintTimer;
     bool showHint;
     std::string hintMessage;
+    bool showCompileErrorPopup;
+    std::string compileErrorPopupMessage;
+    float compileErrorPopupTimer;
     std::string selectedPreset;
     std::string newPresetName;
 
@@ -97,4 +100,5 @@ private:
     static const char* defaultDisplayVertexShader;
     static const char* defaultDisplayFragmentShader;
 };
+
 
