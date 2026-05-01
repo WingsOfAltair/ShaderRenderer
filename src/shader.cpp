@@ -90,65 +90,77 @@ bool Shader::compile(const std::string& vertexSrc, const std::string& fragmentSr
     return true;
 }
 
-bool Shader::compileCompute(const std::string& computeSrc, std::string& errorOut)
+bool Shader::compileCompute(const std::string& source, std::string& errorOut)
 {
-    if (programID) {
+    errorOut.clear();
+
+    // Cleanup old program
+    if (programID)
+    {
         glDeleteProgram(programID);
         programID = 0;
     }
-    uniformCache.clear();
 
-    if (vertexShader) {
-        glDeleteShader(vertexShader);
-        vertexShader = 0;
-    }
-    if (fragmentShader) {
-        glDeleteShader(fragmentShader);
-        fragmentShader = 0;
-    }
+    // ============================
+    // CREATE SHADER
+    // ============================
+    GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
 
-    if (computeShader) {
-        glDeleteShader(computeShader);
-        computeShader = 0;
-    }
+    const char* src = source.c_str();
+    glShaderSource(shader, 1, &src, nullptr);
+    glCompileShader(shader);
 
-    computeShader = glCreateShader(GL_COMPUTE_SHADER);
-    const char* csrc = computeSrc.c_str();
-    glShaderSource(computeShader, 1, &csrc, nullptr);
-    glCompileShader(computeShader);
-
+    // ============================
+    // CHECK COMPILE
+    // ============================
     GLint success;
-    glGetShaderiv(computeShader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char infoLog[512];
-        glGetShaderInfoLog(computeShader, 512, nullptr, infoLog);
-        errorOut = "Compute shader compilation failed:\n" + std::string(infoLog);
-        glDeleteShader(computeShader);
-        computeShader = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+
+    if (!success)
+    {
+        char log[2048];
+        glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
+
+        errorOut = std::string("COMPILE ERROR:\n") + log;
+
+        glDeleteShader(shader);
         return false;
     }
 
+    // ============================
+    // CREATE PROGRAM
+    // ============================
     programID = glCreateProgram();
-    glAttachShader(programID, computeShader);
+    glAttachShader(programID, shader);
     glLinkProgram(programID);
 
+    // shader no longer needed after linking
+    glDeleteShader(shader);
+
+    // ============================
+    // CHECK LINK
+    // ============================
     glGetProgramiv(programID, GL_LINK_STATUS, &success);
-    if (!success) {
-        char infoLog[512];
-        glGetProgramInfoLog(programID, 512, nullptr, infoLog);
-        errorOut = "Compute shader program linking failed:\n" + std::string(infoLog);
+
+    if (!success)
+    {
+        char log[2048];
+        glGetProgramInfoLog(programID, sizeof(log), nullptr, log);
+
+        errorOut = std::string("LINK ERROR:\n") + log;
+
+        glDeleteProgram(programID);
+        programID = 0;
         return false;
     }
 
-    glDetachShader(programID, computeShader);
-
-    errorOut = "";
     return true;
 }
 
 void Shader::use() const
 {
-    glUseProgram(programID);
+    if (programID)
+        glUseProgram(programID);
 }
 
 int Shader::getUniformLocation(const std::string& name) const
@@ -158,32 +170,44 @@ int Shader::getUniformLocation(const std::string& name) const
 
 void Shader::setFloat(const std::string& name, float value) const
 {
-    glUniform1f(getUniformLocation(name), value);
+    int loc = getUniformLocation(name);
+    if (loc != -1)
+        glUniform1f(loc, value);
 }
 
 void Shader::setInt(const std::string& name, int value) const
 {
-    glUniform1i(getUniformLocation(name), value);
+    int loc = getUniformLocation(name);
+    if (loc != -1)
+        glUniform1i(loc, value);
 }
 
 void Shader::setVec2(const std::string& name, float x, float y) const
 {
-    glUniform2f(getUniformLocation(name), x, y);
+    int loc = getUniformLocation(name);
+    if (loc != -1)
+        glUniform2f(loc, x, y);
 }
 
 void Shader::setVec3(const std::string& name, float x, float y, float z) const
 {
-    glUniform3f(getUniformLocation(name), x, y, z);
+    int loc = getUniformLocation(name);
+    if (loc != -1)
+        glUniform3f(loc, x, y, z);
 }
 
 void Shader::setVec4(const std::string& name, float x, float y, float z, float w) const
 {
-    glUniform4f(getUniformLocation(name), x, y, z, w);
+    int loc = getUniformLocation(name);
+    if (loc != -1)
+        glUniform4f(loc, x, y, z, w);
 }
 
 void Shader::setMat4(const std::string& name, const glm::mat4& value) const
 {
-    glUniformMatrix4fv(getUniformLocation(name), 1, GL_FALSE, &value[0][0]);
+    int loc = getUniformLocation(name);
+    if (loc != -1)
+        glUniformMatrix4fv(loc, 1, GL_FALSE, &value[0][0]);
 }
 
 int Shader::getUniformLocationCached(const std::string& name) const

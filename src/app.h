@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <glad/gl.h>
 
 struct ShaderPreset {
     std::string name;
@@ -40,6 +41,11 @@ private:
     bool deletePreset(const std::string& name, std::string& errorOut) const;
     bool loadPreset(const std::string& name, ShaderPreset& preset, std::string& errorOut) const;
     static std::string extractFirstShaderStage(const std::string& source);
+    void createErrorTexture();
+    void loadLogoTexture();
+    void createFBO(GLuint& fbo, GLuint& tex);
+    void destroyFBO(GLuint& fbo, GLuint& tex);
+    static std::filesystem::path getExecutableDirectory();
 
     // GLFW
     GLFWwindow* window;
@@ -93,6 +99,10 @@ private:
     unsigned int VAO;
     unsigned int VBO;
 
+    GLuint errorTexture;
+    GLuint logoTexture;
+    bool logoLoaded = false;
+
     // Default shaders
     static const char* defaultVertexShader;
     static const char* defaultFragmentShader;
@@ -100,6 +110,14 @@ private:
     static const char* defaultComputeShader;
     static const char* defaultDisplayVertexShader;
     static const char* defaultDisplayFragmentShader;
+
+    bool forceDebugDraw = false;
+
+    GLuint backgroundFBO = 0;
+    GLuint backgroundTex = 0;
+
+    GLuint shaderFBO = 0;
+    GLuint shaderTex = 0;
 };
 
 

@@ -35,6 +35,7 @@ target_include_directories(ShaderRenderer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glfw/include
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glad/include
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glm
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/stb
 )
 
 target_compile_definitions(ShaderRenderer PRIVATE GLFW_INCLUDE_NONE IMGUI_IMPL_OPENGL_LOADER_CUSTOM)

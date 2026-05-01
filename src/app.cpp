@@ -16,6 +16,8 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 // Default vertex shader
 const char* App::defaultVertexShader = R"(
@@ -40,7 +42,7 @@ void main() {
     float radius = length(pos);
     vec3 color = 0.5 + 0.5 * cos(vec3(0.0, 2.0, 4.0) + pos.xyx * 3.0 + uTime);
     color *= 1.0 - smoothstep(0.5, 0.9, radius);
-    FragColor = vec4(color, 1.0);
+    FragColor = vec4(color, 0.6);
 }
 )";
 
@@ -56,7 +58,7 @@ void main() {
     vec2 uv = gl_FragCoord.xy / uResolution;
     vec3 color = vec3(uv, 0.5 + 0.5 * sin(uTime * 2.0));
     color = pow(color, vec3(0.45));
-    FragColor = vec4(color, 1.0);
+    FragColor = vec4(color, 0.6);
 }
 )";
 
@@ -83,6 +85,7 @@ const char* App::defaultDisplayVertexShader = R"(
 #version 330 core
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aTexCoord;
+
 out vec2 vTexCoord;
 
 void main() {
@@ -102,6 +105,39 @@ void main() {
 }
 )";
 
+void App::createFBO(GLuint& fbo, GLuint& tex)
+{
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+        windowWidth, windowHeight, 0,
+        GL_RGBA, GL_FLOAT, nullptr);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glFramebufferTexture2D(GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, tex, 0);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cerr << "FBO incomplete!\n";
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void App::destroyFBO(GLuint& fbo, GLuint& tex)
+{
+    if (tex) glDeleteTextures(1, &tex);
+    if (fbo) glDeleteFramebuffers(1, &fbo);
+    tex = 0;
+    fbo = 0;
+}
+
 App::App()
     : window(nullptr), windowWidth(1280), windowHeight(720),
       shaderValid(false), computeValid(false), useComputeShader(false),
@@ -109,13 +145,91 @@ App::App()
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       hintTimer(0.0f), showHint(false),
       showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
-      VAO(0), VBO(0), computeTexture(0), selectedPreset(""), newPresetName("")
+      VAO(0), VBO(0), computeTexture(0), selectedPreset(""), newPresetName(""), errorTexture(0)
 {
 }
 
 App::~App()
 {
     shutdown();
+}
+
+void App::loadLogoTexture()
+{
+    if (logoLoaded) return;
+
+    std::string path = (getExecutableDirectory() / "images/plancksoft_b_t.png").string();
+
+    int width, height, channels;
+    stbi_set_flip_vertically_on_load(true);
+
+    unsigned char* data = stbi_load(path.c_str(), &width, &height, &channels, 4);
+    if (!data) {
+        std::cerr << "Failed to load image: " << path << std::endl;
+        return;
+    }
+
+    glGenTextures(1, &logoTexture);
+    glBindTexture(GL_TEXTURE_2D, logoTexture);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+        width, height, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE, data);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    stbi_image_free(data);
+
+    logoLoaded = true;
+}
+
+void App::createErrorTexture()
+{
+    if (errorTexture) return;
+
+    const int size = 256;
+    std::vector<unsigned char> data(size * size * 4);
+
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+
+            int i = (y * size + x) * 4;
+
+            bool checker = ((x / 32) % 2) ^ ((y / 32) % 2);
+
+            if (checker) {
+                // dark background
+                data[i + 0] = 30;
+                data[i + 1] = 0;
+                data[i + 2] = 0;
+            } else {
+                // red error tint
+                data[i + 0] = 200;
+                data[i + 1] = 30;
+                data[i + 2] = 30;
+            }
+
+            data[i + 3] = 255;
+        }
+    }
+
+    glGenTextures(1, &errorTexture);
+    glBindTexture(GL_TEXTURE_2D, errorTexture);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+        size, size, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE,
+        data.data());
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 bool App::init(int width, int height, const char* title)
@@ -153,17 +267,39 @@ bool App::init(int width, int height, const char* title)
         return false;
     }
 
-    glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int w2, int h2) {
+    glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int ww, int hh)
+    {
         auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
-        if (app) {
-            app->windowWidth = w2;
-            app->windowHeight = h2;
-            glViewport(0, 0, w2, h2);
-            app->createComputeTexture(w2, h2);
-        }
+
+        app->windowWidth = ww;
+        app->windowHeight = hh;
+
+        glViewport(0, 0, ww, hh);
+
+        app->destroyFBO(app->backgroundFBO, app->backgroundTex);
+        app->destroyFBO(app->shaderFBO, app->shaderTex);
+
+        app->createFBO(app->backgroundFBO, app->backgroundTex);
+        app->createFBO(app->shaderFBO, app->shaderTex);
+
+        app->destroyComputeTexture();
+        app->createComputeTexture(ww, hh);
     });
 
     glfwSetWindowUserPointer(window, this);
+
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_DEBUG_OUTPUT);
+    glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+
+    glDebugMessageCallback([](GLenum source, GLenum type, GLuint id,
+                            GLenum severity, GLsizei length,
+                            const GLchar* message, const void* userParam)
+    {
+        std::cerr << "GL DEBUG: " << message << std::endl;
+    }, nullptr);
 
     // Initialize ImGui
     IMGUI_CHECKVERSION();
@@ -184,9 +320,21 @@ bool App::init(int width, int height, const char* title)
     // Compile initial shaders
     compileShader();
     displayShader.compile(defaultDisplayVertexShader, defaultDisplayFragmentShader, compileError);
+    std::cout << "Display shader compile: " << compileError << std::endl;
 
     // Create fullscreen quad and compute resources
+    if (VAO) glDeleteVertexArrays(1, &VAO);
+    if (VBO) glDeleteBuffers(1, &VBO);
+    VAO = 0;
+    VBO = 0;
+
     updateBuffers();
+    loadLogoTexture();
+    createErrorTexture();
+
+    createFBO(backgroundFBO, backgroundTex);
+    createFBO(shaderFBO, shaderTex);
+
     createComputeTexture(windowWidth, windowHeight);
     compileComputeShader();
 
@@ -195,50 +343,38 @@ bool App::init(int width, int height, const char* title)
 
 void App::run()
 {
-    while (!glfwWindowShouldClose(window)) {
-        glfwPollEvents();
-        
-        if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS)
-        {
-            compileShader();
-            showHint = true;
-            hintTimer = 0.0f;
-        }
-        
-        time += 0.016f;
+    while (!glfwWindowShouldClose(window))
+{
+    glfwPollEvents();
 
-        // Start ImGui frame
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
-
-        // Render UI
-        renderUI();
-
-        // Prepare frame
-        int displayW, displayH;
-        glfwGetFramebufferSize(window, &displayW, &displayH);
-        glViewport(0, 0, displayW, displayH);
-        glClearColor(0.04f, 0.04f, 0.08f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        // Render scene behind the UI
-        if (shaderValid) {
-            renderScene();
-        }
-
-        // Render ImGui on top
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-        glfwSwapBuffers(window);
+    if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS)
+    {
+        compileShader();
+        showHint = true;
+        hintTimer = 0.0f;
     }
+
+    time += 0.016f;
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    renderUI();
+
+    renderScene();   
+
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    glfwSwapBuffers(window);
+}
 }
 
 void App::shutdown()
 {
-    if (VAO) glDeleteVertexArrays(1, &VAO);
-    if (VBO) glDeleteBuffers(1, &VBO);
+    if (glIsVertexArray(VAO)) glDeleteVertexArrays(1, &VAO);
+    if (glIsBuffer(VBO)) glDeleteBuffers(1, &VBO);
     destroyComputeTexture();
 
     ImGui_ImplOpenGL3_Shutdown();
@@ -255,7 +391,7 @@ void App::shutdown()
 void App::renderUI()
 {
     hintTimer += 0.016f;
-    if (hintTimer > 5.0f) {
+    if (hintTimer > 10.0f) {
         showHint = false;
     }
 
@@ -328,9 +464,11 @@ void App::renderUI()
         if (ImGui::Begin("Shader Compilation Error",
                         &showCompileErrorPopup,
                         ImGuiWindowFlags_None)) {
+
+            loadLogoTexture();
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
                             "Compilation failed. The popup will close in %.0f seconds",
-                            5.0f - compileErrorPopupTimer);
+                            10.0f - compileErrorPopupTimer);
 
             ImGui::Separator();
             ImGui::TextWrapped("%s", compileErrorPopupMessage.c_str());
@@ -446,8 +584,13 @@ void App::renderUI()
 
         bool wasUsingCompute = useComputeShader;
         ImGui::Checkbox("Use compute shader", &useComputeShader);
-        if (useComputeShader && !wasUsingCompute) {
-            compileComputeShader();
+        if (useComputeShader && !wasUsingCompute)
+        {
+            if (!compileComputeShader(true))
+            {
+                showCompileErrorPopup = true;
+            }
+
             showHint = true;
             hintTimer = 0.0f;
         }
@@ -486,36 +629,112 @@ void App::renderUI()
 
 void App::compileShader()
 {
+    shaderValid = false;
+    computeValid = false;
+
     compileError.clear();
-    compileErrorPopupMessage.clear();
-
-    bool shaderOk = shader.compile(vertexCode, fragmentCode, compileError);
-    if (!shaderOk) {
-        compileErrorPopupMessage = "Shader compilation failed:\n" + compileError;
-    }
-
-    // Also compile compute shader when reloading
     computeCompileError.clear();
-    std::string computeSource = extractFirstShaderStage(computeCode);
-    bool computeOk = computeShader.compileCompute(computeSource, computeCompileError);
-    if (!computeOk && !computeCompileError.empty()) {
-        if (!compileErrorPopupMessage.empty()) {
-            compileErrorPopupMessage += "\n\n--- Compute Shader ---\n";
-        }
-        compileErrorPopupMessage += "Compute shader compilation failed:\n" + computeCompileError;
+    compileErrorPopupMessage.clear();
+    hintMessage.clear();
+
+    // =========================
+    // 1. Vertex / Fragment
+    // =========================
+    bool shaderOk = shader.compile(vertexCode, fragmentCode, compileError);
+
+    if (!shaderOk)
+    {
+        compileErrorPopupMessage =
+            "Shader compilation failed:\n" + compileError;
     }
 
-    if (shaderOk && computeOk) {
-        shaderValid = true;
-        computeValid = true;
-        hintMessage = "Shader reloaded!";
-        std::cout << "Shader compiled successfully!" << std::endl;
-    } else {
-        shaderValid = shaderOk;
-        computeValid = computeOk;
+    // =========================
+    // 2. Compute (optional)
+    // =========================
+    bool computeOk = true;
+
+    if (useComputeShader)
+    {
+        std::string computeSource = extractFirstShaderStage(computeCode);
+
+        computeOk = computeShader.compileCompute(computeSource, computeCompileError);
+
+        if (!computeOk)
+        {
+            if (!compileErrorPopupMessage.empty())
+                compileErrorPopupMessage += "\n\n--- Compute Shader ---\n";
+            else
+                compileErrorPopupMessage += "--- Compute Shader ---\n";
+
+            compileErrorPopupMessage +=
+                "Compute shader compilation failed:\n" + computeCompileError;
+        }
+    }
+
+    // =========================
+    // 3. Update state
+    // =========================
+    shaderValid = shaderOk;
+    computeValid = computeOk;
+
+    bool overallOk = shaderOk && (!useComputeShader || computeOk);
+
+    // =========================
+    // 4. Result handling
+    // =========================
+    if (overallOk)
+    {
+        std::ostringstream msg;
+
+        msg << "✓ Shader compilation successful\n\n";
+        msg << "Pipeline status:\n";
+        msg << " - Vertex/Fragment: OK\n";
+
+        if (useComputeShader)
+            msg << " - Compute Shader: OK\n";
+        else
+            msg << " - Compute Shader: Disabled\n";
+
+        msg << "\nGPU program is now active and rendering with the updated shader state.\n";
+        msg << "Time elapsed: " << time << " seconds\n";
+
+        hintMessage = msg.str();
+
+        std::cout << hintMessage << std::endl;
+    }
+    else
+    {
+        std::ostringstream msg;
+
+        msg << "Shader compilation failed\n\n";
+        msg << "One or more shader stages failed to compile.\n";
+        msg << "The previous valid shader (if any) is still active.\n\n";
+
+        msg << "----- Vertex / Fragment Stage -----\n";
+        msg << compileError << "\n";
+
+        if (useComputeShader)
+        {
+            msg << "----- Compute Shader Stage -----\n";
+            msg << computeCompileError << "\n";
+        }
+
+        msg << "\nCommon causes:\n";
+        msg << " - GLSL syntax error or missing semicolon\n";
+        msg << " - Invalid uniform or attribute name\n";
+        msg << " - Incorrect #version for driver support\n";
+        msg << " - Texture/image binding mismatch\n";
+
+        msg << "\nTip: isolate the error by disabling compute shader or reverting to default fragment shader.";
+
+        compileErrorPopupMessage = msg.str();
+        hintMessage = "Shader compilation failed.";
+
         showCompileErrorPopup = true;
         compileErrorPopupTimer = 0.0f;
-        std::cerr << "Shader compilation failed: " << compileErrorPopupMessage << std::endl;
+
+        std::cerr << "Shader compilation failed:\n"
+                << compileErrorPopupMessage << std::endl;
     }
 }
 
@@ -536,6 +755,12 @@ std::string App::extractFirstShaderStage(const std::string& source)
 
 bool App::compileComputeShader(bool showPopup)
 {
+    if (!useComputeShader)
+    {
+        computeValid = false;
+        computeCompileError.clear();
+        return false;
+    }
     computeCompileError.clear();
     if (!showPopup) {
         compileErrorPopupMessage.clear();
@@ -544,17 +769,44 @@ bool App::compileComputeShader(bool showPopup)
 
     if (computeShader.compileCompute(computeSource, computeCompileError)) {
         computeValid = true;
-        hintMessage = "Compute shader compiled successfully!";
-        std::cout << "Compute shader compiled successfully!" << std::endl;
+
+        std::ostringstream msg;
+
+        msg << "✓ Compute shader compiled successfully\n\n";
+        msg << "Compute pipeline is now active.\n";
+        msg << "Dispatch will run at next frame.\n";
+
+        if (showPopup)
+            hintMessage = msg.str();
+        else
+            hintMessage = "Compute shader compiled (silent mode)";
+
+        std::cout << msg.str() << std::endl;
         return true;
     } else {
         computeValid = false;
+
+        std::ostringstream msg;
+
+        msg << "Compute shader compilation failed\n\n";
+        msg << "The compute stage could not be executed on the GPU.\n\n";
+
+        msg << "Error log:\n";
+        msg << computeCompileError << "\n\n";
+
+        msg << "Possible causes:\n";
+        msg << " - Invalid image binding (layout/binding mismatch)\n";
+        msg << " - Missing memory barrier usage assumptions\n";
+        msg << " - Wrong work group size or dispatch bounds\n";
+        msg << " - GLSL 430 requirement not met\n";
+
         if (showPopup) {
-            compileErrorPopupMessage = "Compute shader compilation failed:\n" + computeCompileError;
+            compileErrorPopupMessage = msg.str();
             showCompileErrorPopup = true;
             compileErrorPopupTimer = 0.0f;
         }
-        std::cerr << "Compute shader compilation failed: " << computeCompileError << std::endl;
+
+        std::cerr << msg.str() << std::endl;
         return false;
     }
 }
@@ -588,7 +840,7 @@ void App::destroyComputeTexture()
     }
 }
 
-static std::filesystem::path getExecutableDirectory()
+std::filesystem::path App::getExecutableDirectory()
 {
 #ifdef _WIN32
     char buffer[MAX_PATH] = {};
@@ -941,32 +1193,94 @@ void App::renderSavedShadersWindow()
 
 void App::renderScene()
 {
-    if (useComputeShader && computeValid && computeTexture != 0) {
-        computeShader.use();
-        computeShader.setFloat("uTime", time);
-        computeShader.setVec2("uResolution", static_cast<float>(windowWidth), static_cast<float>(windowHeight));
-        glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, windowWidth, windowHeight);
 
-        int groupsX = (windowWidth + 15) / 16;
-        int groupsY = (windowHeight + 15) / 16;
-        glDispatchCompute(groupsX, groupsY, 1);
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glBindVertexArray(VAO);
+
+    bool renderOk = shaderValid;
+
+    if (useComputeShader)
+    {
+        renderOk = renderOk && computeValid;
+    }
+
+    if (renderOk)
+    {
+        // ============================
+        // STEP 1: RUN COMPUTE (if enabled)
+        // ============================
+        if (useComputeShader)
+        {
+            computeShader.use();
+
+            glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+
+            computeShader.setFloat("uTime", time);
+            computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+
+            glDispatchCompute(
+                (GLuint)(windowWidth + 15) / 16,
+                (GLuint)(windowHeight + 15) / 16,
+                1
+            );
+
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+            glFinish();
+
+            GLenum err = glGetError();
+            if (err != GL_NO_ERROR)
+            {
+                std::cerr << "GL ERROR after compute: " << err << std::endl;
+            }
+        }
+
+        // ============================
+        // STEP 2: DRAW
+        // ============================
+
+        if (useComputeShader)
+        {
+            // Show compute output
+            displayShader.use();
+            displayShader.setInt("uTexture", 0);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, computeTexture);
+        }
+        else
+        {
+            // Normal fragment shader
+            shader.use();
+
+            shader.setFloat("uTime", time);
+            shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+            shader.setVec2("uMouse", 0.0f, 0.0f);
+        }
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    else
+    {
+        // fallback (logo/error)
 
         displayShader.use();
         displayShader.setInt("uTexture", 0);
+
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, computeTexture);
-    } else {
-        shader.use();
-        shader.setFloat("uTime", time);
-        shader.setVec2("uResolution", static_cast<float>(windowWidth), static_cast<float>(windowHeight));
-        double mouseX, mouseY;
-        glfwGetCursorPos(window, &mouseX, &mouseY);
-        shader.setVec2("uMouse", static_cast<float>(mouseX), static_cast<float>(windowHeight - mouseY));
+
+        if (logoLoaded && logoTexture != 0)
+            glBindTexture(GL_TEXTURE_2D, logoTexture);
+        else
+            glBindTexture(GL_TEXTURE_2D, errorTexture);
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 
-    glBindVertexArray(VAO);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
 }
 
