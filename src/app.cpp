@@ -315,19 +315,31 @@ void App::renderUI()
         ImGui::End();
     }
 
-        // Compile error popup
+    // Compile error popup
     if (showCompileErrorPopup) {
-        ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x / 2.0f, ImGui::GetIO().DisplaySize.y / 2.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(500, 300));
-        if (ImGui::Begin("Shader Compilation Error", &showCompileErrorPopup, ImGuiWindowFlags_None)) {
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Compilation failed. The popup will close in %.0f seconds", 5.0f - compileErrorPopupTimer);
+        ImGui::SetNextWindowPos(
+            ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f,
+                ImGui::GetIO().DisplaySize.y * 0.5f),
+            ImGuiCond_FirstUseEver
+        );
+
+        ImGui::SetNextWindowSize(ImVec2(500, 300), ImGuiCond_FirstUseEver);
+
+        if (ImGui::Begin("Shader Compilation Error",
+                        &showCompileErrorPopup,
+                        ImGuiWindowFlags_None)) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                            "Compilation failed. The popup will close in %.0f seconds",
+                            5.0f - compileErrorPopupTimer);
+
             ImGui::Separator();
             ImGui::TextWrapped("%s", compileErrorPopupMessage.c_str());
+
             ImGui::Separator();
             if (ImGui::Button("Copy to Clipboard", ImVec2(-1, 0))) {
                 ImGui::SetClipboardText(compileErrorPopupMessage.c_str());
             }
-            ImGui::SameLine();
+
             if (ImGui::Button("Close", ImVec2(-1, 0))) {
                 showCompileErrorPopup = false;
                 compileErrorPopupTimer = 0.0f;
