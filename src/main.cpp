@@ -1,5 +1,6 @@
 #include "app.h"
 #include <iostream>
+#include <cstdlib>
 
 int main()
 {
@@ -13,5 +14,9 @@ int main()
     app.run();
     app.shutdown();
 
-    return 0;
+    // 🔥 FORCE FULL PROCESS EXIT (prevents zombie process)
+    std::cout << "Application exited cleanly." << std::endl;
+    std::fflush(stdout);
+
+    std::_Exit(0);   // hard termination, no cleanup left hanging
 }
