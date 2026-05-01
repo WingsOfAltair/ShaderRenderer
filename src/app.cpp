@@ -197,6 +197,14 @@ void App::run()
 {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+        
+        if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS)
+        {
+            compileShader();
+            showHint = true;
+            hintTimer = 0.0f;
+        }
+        
         time += 0.016f;
 
         // Start ImGui frame
