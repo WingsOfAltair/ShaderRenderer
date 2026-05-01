@@ -1,11 +1,17 @@
 cmake_minimum_required(VERSION 3.16)
 project(ShaderRenderer VERSION 1.0 LANGUAGES CXX C)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find OpenGL
+# =========================
+# OpenGL
+# =========================
 find_package(OpenGL REQUIRED)
+
+# =========================
 # ImGui sources
+# =========================
 set(IMGUI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/imgui/imgui.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/imgui/imgui_demo.cpp
@@ -16,7 +22,9 @@ set(IMGUI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/backends/imgui_impl_opengl3.cpp
 )
 
-# Main executable
+# =========================
+# Executable
+# =========================
 add_executable(ShaderRenderer
     src/main.cpp
     src/app.cpp
@@ -38,7 +46,10 @@ target_include_directories(ShaderRenderer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/stb
 )
 
-target_compile_definitions(ShaderRenderer PRIVATE GLFW_INCLUDE_NONE IMGUI_IMPL_OPENGL_LOADER_CUSTOM)
+target_compile_definitions(ShaderRenderer PRIVATE
+    GLFW_INCLUDE_NONE
+    IMGUI_IMPL_OPENGL_LOADER_CUSTOM
+)
 
 target_link_libraries(ShaderRenderer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glfw/lib/glfw3.lib
@@ -46,6 +57,35 @@ target_link_libraries(ShaderRenderer PRIVATE
     opengl32
 )
 
-# Copy shaders directory to output
-file(COPY shaders DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+# =========================
+# ASSETS (DEBUG / RELEASE SAFE)
+# =========================
 
+set(ASSET_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+
+set(SHADER_SRC_DIR ${ASSET_ROOT}/shaders)
+set(IMAGE_SRC_DIR  ${ASSET_ROOT}/src/images)
+
+# Multi-config safe destination folders
+set(SHADER_DST_DIR ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/shaders)
+set(IMAGE_DST_DIR  ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/images)
+
+# Ensure folders exist (per config)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Debug/shaders)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Release/shaders)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Debug/images)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Release/images)
+
+# Copy shaders after build
+add_custom_command(TARGET ShaderRenderer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${SHADER_SRC_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/shaders
+)
+
+# Copy images after build
+add_custom_command(TARGET ShaderRenderer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${IMAGE_SRC_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/images
+)
