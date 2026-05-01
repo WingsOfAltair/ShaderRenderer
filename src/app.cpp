@@ -417,38 +417,55 @@ void App::shutdown()
 void App::renderUI()
 {
     hintTimer += 0.016f;
-    if (hintTimer > 10.0f) {
+    if (hintTimer > 10.0f)
         showHint = false;
-    }
 
-    // Main menu bar
-    if (ImGui::BeginMainMenuBar()) {
-        if (ImGui::BeginMenu("Shader")) {
-            if (ImGui::MenuItem("Reload (F5)", "F5")) {
+    // =========================
+    // MAIN MENU
+    // =========================
+    if (ImGui::BeginMainMenuBar())
+    {
+        if (ImGui::BeginMenu("Shader"))
+        {
+            if (ImGui::MenuItem("Reload (F5)"))
+            {
                 compileShader();
                 showHint = true;
                 hintTimer = 0.0f;
             }
-            if (ImGui::MenuItem("Load test shader")) {
+
+            if (ImGui::MenuItem("Load test shader"))
+            {
                 fragmentCode = testFragmentShader;
                 compileShader();
                 showHint = true;
                 hintTimer = 0.0f;
             }
-            if (ImGui::MenuItem("Reset to default")) {
+
+            if (ImGui::MenuItem("Reset to default"))
+            {
                 vertexCode = defaultVertexShader;
                 fragmentCode = defaultFragmentShader;
+                computeCode = defaultComputeShader;
+                useComputeShader = false;
+
                 compileShader();
+                compileComputeShader();
+
                 showHint = true;
                 hintTimer = 0.0f;
             }
+
             ImGui::Separator();
-            if (ImGui::MenuItem("Exit", "Alt+F4")) {
+
+            if (ImGui::MenuItem("Exit", "Alt+F4"))
                 glfwSetWindowShouldClose(window, true);
-            }
+
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("View")) {
+
+        if (ImGui::BeginMenu("View"))
+        {
             ImGui::MenuItem("Help", nullptr, &showHelp);
             ImGui::MenuItem("Vertex Shader", nullptr, &showVertexEditor);
             ImGui::MenuItem("Fragment Shader", nullptr, &showFragmentEditor);
@@ -456,55 +473,67 @@ void App::renderUI()
             ImGui::MenuItem("Saved Shaders", nullptr, &showSavedShaders);
             ImGui::EndMenu();
         }
+
         ImGui::EndMainMenuBar();
     }
 
-        // Compile error popup (shows for 5 seconds, allows copying)
-    if (showCompileErrorPopup) {
-        compileErrorPopupTimer += 0.016f;
+    // =========================
+    // HINT TIMER
+    // =========================
+    if (showHint)
+    {
+        ImGui::SetNextWindowPos(ImVec2(10, 60), ImGuiCond_Always);
+        ImGui::Begin("Hint",
+                     nullptr,
+                     ImGuiWindowFlags_NoDecoration |
+                     ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoSavedSettings);
 
-        if (compileErrorPopupTimer >= 10.0f) {
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "%s", hintMessage.c_str());
+        ImGui::End();
+    }
+
+    // =========================
+    // ERROR POPUP TIMER
+    // =========================
+    if (showCompileErrorPopup)
+    {
+        compileErrorPopupTimer += 0.016f;
+        if (compileErrorPopupTimer >= 10.0f)
+        {
             showCompileErrorPopup = false;
             compileErrorPopupTimer = 0.0f;
         }
     }
 
-    // Hint popup
-    if (showHint) {
-        ImGui::SetNextWindowPos(ImVec2(10, 60), ImGuiCond_Always);
-        ImGui::Begin("Hint", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize);
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s", hintMessage.c_str());
-        ImGui::End();
-    }
-
-    // Compile error popup
-    if (showCompileErrorPopup) {
+    // =========================
+    // ERROR POPUP
+    // =========================
+    if (showCompileErrorPopup)
+    {
         ImGui::SetNextWindowPos(
             ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f,
-                ImGui::GetIO().DisplaySize.y * 0.5f),
-            ImGuiCond_FirstUseEver
-        );
+                   ImGui::GetIO().DisplaySize.y * 0.5f),
+            ImGuiCond_FirstUseEver);
 
         ImGui::SetNextWindowSize(ImVec2(500, 300), ImGuiCond_FirstUseEver);
 
-        if (ImGui::Begin("Shader Compilation Error",
-                        &showCompileErrorPopup,
-                        ImGuiWindowFlags_None)) {
-
-            loadLogoTexture();
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
-                            "Compilation failed. The popup will close in %.0f seconds",
-                            10.0f - compileErrorPopupTimer);
+        if (ImGui::Begin("Shader Compilation Error", &showCompileErrorPopup))
+        {
+            ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1),
+                               "Compilation failed (auto close in %.0f s)",
+                               10.0f - compileErrorPopupTimer);
 
             ImGui::Separator();
             ImGui::TextWrapped("%s", compileErrorPopupMessage.c_str());
 
             ImGui::Separator();
-            if (ImGui::Button("Copy to Clipboard", ImVec2(-1, 0))) {
-                ImGui::SetClipboardText(compileErrorPopupMessage.c_str());
-            }
 
-            if (ImGui::Button("Close", ImVec2(-1, 0))) {
+            if (ImGui::Button("Copy"))
+                ImGui::SetClipboardText(compileErrorPopupMessage.c_str());
+
+            if (ImGui::Button("Close"))
+            {
                 showCompileErrorPopup = false;
                 compileErrorPopupTimer = 0.0f;
             }
@@ -512,143 +541,121 @@ void App::renderUI()
         ImGui::End();
     }
 
-    // Help window
-    if (showHelp) {
+    // =========================
+    // HELP
+    // =========================
+    if (showHelp)
+    {
         ImGui::SetNextWindowPos(ImVec2(10, 60), ImGuiCond_Always);
-        ImGui::Begin("Help & Controls", &showHelp, ImGuiWindowFlags_NoCollapse);
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Controls:");
-        ImGui::BulletText("F5 - Reload shader");
-        ImGui::BulletText("Click in editor to edit code");
-        ImGui::BulletText("Scroll to scroll in editor");
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Built-in uniforms:");
-        ImGui::BulletText("uTime - Time in seconds");
-        ImGui::BulletText("uResolution - Window resolution");
-        ImGui::BulletText("uMouse - Mouse position (0,0 = bottom-left)");
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Tip:");
-        ImGui::TextWrapped("Edit the fragment shader and press F5 to see changes instantly. The shader renders on a fullscreen quad. Use the Compute Shader panel to render into a texture when enabled.");
+        ImGui::Begin("Help", &showHelp);
+
+        ImGui::Text("F5 - Reload shader");
+        ImGui::Text("Edit shaders live");
+        ImGui::Text("Compute shader optional");
+
         ImGui::End();
     }
 
+    // =========================
+    // SAVED SHADERS
+    // =========================
     renderSavedShadersWindow();
 
-    if (showVertexEditor) {
+    // =========================
+    // FIXED SHADER EDITOR WINDOWS (IMPORTANT PATCH)
+    // =========================
+
+    // Vertex Shader
+    if (showVertexEditor)
+    {
+        ImGui::SetNextWindowSize(ImVec2(450, 450), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowPos(ImVec2(10, 60), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(350, 350), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Vertex Shader", &showVertexEditor, ImGuiWindowFlags_None);
-        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Vertex Shader");
-        ImGui::Separator();
-        
-        static char vertexBuf[8192] = "";
-        strncpy(vertexBuf, vertexCode.c_str(), sizeof(vertexBuf) - 1);
-        vertexBuf[sizeof(vertexBuf) - 1] = '\0';
-        ImGui::InputTextMultiline("##vertex", vertexBuf, IM_ARRAYSIZE(vertexBuf), ImVec2(-1, -1), ImGuiInputTextFlags_None);
-        vertexCode = vertexBuf;
 
-        if (ImGui::Button("Compile (F5)", ImVec2(-1, 0))) {
+        ImGui::Begin("Vertex Shader", &showVertexEditor);
+
+        static char vertexBuf[8192];
+        strcpy(vertexBuf, vertexCode.c_str());
+
+        if (ImGui::InputTextMultiline("##v", vertexBuf, sizeof(vertexBuf), ImVec2(-1, -1)))
+            vertexCode = vertexBuf;
+
+        if (ImGui::Button("Compile"))
             compileShader();
-            showHint = true;
-            hintTimer = 0.0f;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Reset", ImVec2(-1, 0))) {
-            vertexCode = defaultVertexShader;
-            strncpy(vertexBuf, defaultVertexShader, sizeof(vertexBuf) - 1);
-            vertexBuf[sizeof(vertexBuf) - 1] = '\0';
-            compileShader();
-        }
 
-        if (!compileError.empty()) {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error:");
-            ImGui::TextWrapped("%s", compileError.c_str());
-        }
-        ImGui::End();
-    }
-
-    if (showFragmentEditor) {
-        ImGui::SetNextWindowPos(ImVec2(370, 60), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(350, 350), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Fragment Shader", &showFragmentEditor, ImGuiWindowFlags_None);
-        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Fragment Shader");
-        ImGui::Separator();
-        
-        static char fragmentBuf[8192] = "";
-        strncpy(fragmentBuf, fragmentCode.c_str(), sizeof(fragmentBuf) - 1);
-        fragmentBuf[sizeof(fragmentBuf) - 1] = '\0';
-        ImGui::InputTextMultiline("##fragment", fragmentBuf, IM_ARRAYSIZE(fragmentBuf), ImVec2(-1, -1), ImGuiInputTextFlags_None);
-        fragmentCode = fragmentBuf;
-
-        if (ImGui::Button("Compile (F5)", ImVec2(-1, 0))) {
-            compileShader();
-            showHint = true;
-            hintTimer = 0.0f;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Reset", ImVec2(-1, 0))) {
-            fragmentCode = defaultFragmentShader;
-            strncpy(fragmentBuf, defaultFragmentShader, sizeof(fragmentBuf) - 1);
-            fragmentBuf[sizeof(fragmentBuf) - 1] = '\0';
-            compileShader();
-        }
-
-        if (!compileError.empty()) {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error:");
-            ImGui::TextWrapped("%s", compileError.c_str());
-        }
-        ImGui::End();
-    }
-
-    if (showComputeEditor) {
-        ImGui::SetNextWindowPos(ImVec2(730, 60), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(350, 350), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Compute Shader", &showComputeEditor, ImGuiWindowFlags_None);
-        ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Compute Shader");
-        ImGui::Separator();
-
-        bool wasUsingCompute = useComputeShader;
-        ImGui::Checkbox("Use compute shader", &useComputeShader);
-        if (useComputeShader && !wasUsingCompute)
+        if (ImGui::Button("Reset"))
         {
-            if (!compileComputeShader(true))
+            vertexCode = defaultVertexShader;
+            compileShader();
+        }
+
+        ImGui::End();
+    }
+
+    // Fragment Shader
+    if (showFragmentEditor)
+    {
+        ImGui::SetNextWindowSize(ImVec2(450, 450), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(370, 60), ImGuiCond_FirstUseEver);
+
+        ImGui::Begin("Fragment Shader", &showFragmentEditor);
+
+        static char fragmentBuf[8192];
+        strcpy(fragmentBuf, fragmentCode.c_str());
+
+        if (ImGui::InputTextMultiline("##f", fragmentBuf, sizeof(fragmentBuf), ImVec2(-1, -1)))
+            fragmentCode = fragmentBuf;
+
+        if (ImGui::Button("Compile"))
+            compileShader();
+
+        if (ImGui::Button("Reset"))
+        {
+            fragmentCode = defaultFragmentShader;
+            compileShader();
+        }
+
+        ImGui::End();
+    }
+
+    // Compute Shader
+    if (showComputeEditor)
+    {
+        ImGui::SetNextWindowSize(ImVec2(500, 500), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(730, 60), ImGuiCond_FirstUseEver);
+
+        ImGui::Begin("Compute Shader", &showComputeEditor);
+
+        bool prevUse = useComputeShader;
+        ImGui::Checkbox("Enable compute", &useComputeShader);
+
+        if (useComputeShader != prevUse)
+        {
+            if (useComputeShader)
+                compileComputeShader(true);
+            else
             {
-                showCompileErrorPopup = true;
+                computeValid = false;
+                destroyComputeTexture();
             }
 
-            showHint = true;
-            hintTimer = 0.0f;
+            compileShader();
         }
-        ImGui::Separator();
 
-        static char computeBuf[16384] = "";
-        strncpy(computeBuf, computeCode.c_str(), sizeof(computeBuf) - 1);
-        computeBuf[sizeof(computeBuf) - 1] = '\0';
-        ImGui::InputTextMultiline("##compute", computeBuf, IM_ARRAYSIZE(computeBuf), ImVec2(-1, -1), ImGuiInputTextFlags_None);
-        computeCode = computeBuf;
+        static char computeBuf[16384];
+        strcpy(computeBuf, computeCode.c_str());
 
-        if (ImGui::Button("Compile Compute", ImVec2(-1, 0))) {
+        if (ImGui::InputTextMultiline("##c", computeBuf, sizeof(computeBuf), ImVec2(-1, -1)))
+            computeCode = computeBuf;
+
+        if (ImGui::Button("Compile Compute"))
             compileComputeShader();
-            showHint = true;
-            hintTimer = 0.0f;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Reset", ImVec2(-1, 0))) {
+
+        if (ImGui::Button("Reset"))
+        {
             computeCode = defaultComputeShader;
-            strncpy(computeBuf, defaultComputeShader, sizeof(computeBuf) - 1);
-            computeBuf[sizeof(computeBuf) - 1] = '\0';
             compileComputeShader();
         }
 
-        if (!computeCompileError.empty()) {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error:");
-            ImGui::TextWrapped("%s", computeCompileError.c_str());
-        } else if (useComputeShader && !computeValid) {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Compute shader is enabled but not compiled. Press Compile Compute.");
-        }
         ImGui::End();
     }
 }
@@ -663,15 +670,20 @@ void App::compileShader()
     compileErrorPopupMessage.clear();
     hintMessage.clear();
 
+    showCompileErrorPopup = false;
+    compileErrorPopupTimer = 0.0f;
+
     // =========================
     // 1. Vertex / Fragment
     // =========================
     bool shaderOk = shader.compile(vertexCode, fragmentCode, compileError);
 
+    std::ostringstream popup;
+
     if (!shaderOk)
     {
-        compileErrorPopupMessage =
-            "Shader compilation failed:\n" + compileError;
+        popup << "Shader compilation failed:\n";
+        popup << compileError << "\n";
     }
 
     // =========================
@@ -687,13 +699,9 @@ void App::compileShader()
 
         if (!computeOk)
         {
-            if (!compileErrorPopupMessage.empty())
-                compileErrorPopupMessage += "\n\n--- Compute Shader ---\n";
-            else
-                compileErrorPopupMessage += "--- Compute Shader ---\n";
-
-            compileErrorPopupMessage +=
-                "Compute shader compilation failed:\n" + computeCompileError;
+            popup << "\n--- Compute Shader ---\n";
+            popup << "Compute shader compilation failed:\n";
+            popup << computeCompileError << "\n";
         }
     }
 
@@ -712,56 +720,68 @@ void App::compileShader()
     {
         std::ostringstream msg;
 
-        msg << "✓ Shader compilation successful\n\n";
+        msg << "✓ Vertex/Fragment shader compiled successfully\n\n";
         msg << "Pipeline status:\n";
-        msg << " - Vertex/Fragment: OK\n";
+        msg << " - Vertex Shader: OK\n";
+        msg << " - Fragment Shader: OK\n";
 
         if (useComputeShader)
             msg << " - Compute Shader: OK\n";
         else
             msg << " - Compute Shader: Disabled\n";
 
-        msg << "\nGPU program is now active and rendering with the updated shader state.\n";
+        msg << "\nGPU program is now active.\n";
+        msg << "Rendering updated shader pipeline in real-time.\n\n";
+
         msg << "Time elapsed: " << time << " seconds\n";
 
         hintMessage = msg.str();
 
         std::cout << hintMessage << std::endl;
+
+        showHint = true;
+        hintTimer = 0.0f;
+
+        return;
     }
-    else
+
+    // =========================
+    // 5. Failure handling
+    // =========================
+    std::ostringstream msg;
+
+    msg << "Shader compilation failed\n\n";
+    msg << "One or more shader stages failed to compile.\n";
+    msg << "The previous valid shader (if any) is still active.\n\n";
+
+    if (!compileError.empty())
     {
-        std::ostringstream msg;
-
-        msg << "Shader compilation failed\n\n";
-        msg << "One or more shader stages failed to compile.\n";
-        msg << "The previous valid shader (if any) is still active.\n\n";
-
         msg << "----- Vertex / Fragment Stage -----\n";
         msg << compileError << "\n";
-
-        if (useComputeShader)
-        {
-            msg << "----- Compute Shader Stage -----\n";
-            msg << computeCompileError << "\n";
-        }
-
-        msg << "\nCommon causes:\n";
-        msg << " - GLSL syntax error or missing semicolon\n";
-        msg << " - Invalid uniform or attribute name\n";
-        msg << " - Incorrect #version for driver support\n";
-        msg << " - Texture/image binding mismatch\n";
-
-        msg << "\nTip: isolate the error by disabling compute shader or reverting to default fragment shader.";
-
-        compileErrorPopupMessage = msg.str();
-        hintMessage = "Shader compilation failed.";
-
-        showCompileErrorPopup = true;
-        compileErrorPopupTimer = 0.0f;
-
-        std::cerr << "Shader compilation failed:\n"
-                << compileErrorPopupMessage << std::endl;
     }
+
+    if (useComputeShader && !computeCompileError.empty())
+    {
+        msg << "----- Compute Shader Stage -----\n";
+        msg << computeCompileError << "\n";
+    }
+
+    msg << "\nCommon causes:\n";
+    msg << " - GLSL syntax error or missing semicolon\n";
+    msg << " - Invalid uniform or attribute name\n";
+    msg << " - Incorrect #version for driver support\n";
+    msg << " - Texture/image binding mismatch\n";
+
+    msg << "\nTip: isolate the error by disabling compute shader or reverting to default fragment shader.";
+
+    compileErrorPopupMessage = msg.str();
+    hintMessage = "Shader compilation failed.";
+
+    showCompileErrorPopup = true;
+    compileErrorPopupTimer = 0.0f;
+
+    std::cerr << "Shader compilation failed:\n"
+              << compileErrorPopupMessage << std::endl;
 }
 
 std::string App::extractFirstShaderStage(const std::string& source)
