@@ -1,9 +1,26 @@
 #include "app.h"
 #include <iostream>
-#include <cstdlib>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+bool alreadyRunning()
+{
+    CreateMutexA(NULL, TRUE, "ShaderRendererMutex");
+    return GetLastError() == ERROR_ALREADY_EXISTS;
+}
 
 int main()
 {
+#ifdef _WIN32
+    // Optional: no console flash / detach cleanly
+    FreeConsole();
+#endif
+
+    if (alreadyRunning())
+        return 0;
+
     App app;
 
     if (!app.init(1280, 720, "Shader Renderer")) {
@@ -12,11 +29,10 @@ int main()
     }
 
     app.run();
+
     app.shutdown();
 
-    // 🔥 FORCE FULL PROCESS EXIT (prevents zombie process)
     std::cout << "Application exited cleanly." << std::endl;
-    std::fflush(stdout);
 
-    std::_Exit(0);   // hard termination, no cleanup left hanging
+    return 0; // ✅ proper termination
 }

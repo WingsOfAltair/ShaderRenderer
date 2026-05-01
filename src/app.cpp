@@ -344,47 +344,73 @@ bool App::init(int width, int height, const char* title)
 void App::run()
 {
     while (!glfwWindowShouldClose(window))
-{
-    glfwPollEvents();
-
-    if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS)
     {
-        compileShader();
-        showHint = true;
-        hintTimer = 0.0f;
+        glfwPollEvents();
+
+        // -------------------------
+        // Input
+        // -------------------------
+        if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS)
+        {
+            compileShader();
+            showHint = true;
+            hintTimer = 0.0f;
+        }
+
+        // -------------------------
+        // Update
+        // -------------------------
+        time += 0.016f;
+
+        // -------------------------
+        // UI
+        // -------------------------
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        renderUI();
+        renderScene();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        glfwSwapBuffers(window);
+
+        // 🔥 FORCE EXIT CHECK (important fix)
+        if (window && glfwWindowShouldClose(window))
+        {
+            break;
+        }
     }
 
-    time += 0.016f;
-
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    ImGui::NewFrame();
-
-    renderUI();
-
-    renderScene();   
-
-    ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-    glfwSwapBuffers(window);
-}
+    // 🔥 EXTRA SAFETY: ensure exit flag is respected immediately
+    if (window)
+    {
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
 }
 
 void App::shutdown()
 {
+    // Stop GPU submission first
+    glFlush();
+
     if (glIsVertexArray(VAO)) glDeleteVertexArrays(1, &VAO);
     if (glIsBuffer(VBO)) glDeleteBuffers(1, &VBO);
+
     destroyComputeTexture();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 
-    if (window) {
+    if (window)
+    {
         glfwDestroyWindow(window);
         window = nullptr;
     }
+
     glfwTerminate();
 }
 
@@ -1229,8 +1255,6 @@ void App::renderScene()
             );
 
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
-            glFinish();
 
             GLenum err = glGetError();
             if (err != GL_NO_ERROR)
