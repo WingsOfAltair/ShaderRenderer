@@ -292,6 +292,7 @@ void App::renderUI()
         // Compile error popup (shows for 5 seconds, allows copying)
     if (showCompileErrorPopup) {
         compileErrorPopupTimer += 0.016f;
+
         if (compileErrorPopupTimer >= 10.0f) {
             showCompileErrorPopup = false;
             compileErrorPopupTimer = 0.0f;
@@ -306,7 +307,7 @@ void App::renderUI()
         ImGui::End();
     }
 
-    // Compile error popup
+        // Compile error popup
     if (showCompileErrorPopup) {
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x / 2.0f, ImGui::GetIO().DisplaySize.y / 2.0f), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(500, 300));
@@ -468,20 +469,37 @@ void App::compileShader()
     compileError.clear();
     compileErrorPopupMessage.clear();
 
-    if (shader.compile(vertexCode, fragmentCode, compileError)) {
+    bool shaderOk = shader.compile(vertexCode, fragmentCode, compileError);
+    if (!shaderOk) {
+        compileErrorPopupMessage = "Shader compilation failed:\n" + compileError;
+    }
+
+    // Also compile compute shader when reloading
+    computeCompileError.clear();
+    std::string computeSource = extractFirstShaderStage(computeCode);
+    bool computeOk = computeShader.compileCompute(computeSource, computeCompileError);
+    if (!computeOk && !computeCompileError.empty()) {
+        if (!compileErrorPopupMessage.empty()) {
+            compileErrorPopupMessage += "\n\n--- Compute Shader ---\n";
+        }
+        compileErrorPopupMessage += "Compute shader compilation failed:\n" + computeCompileError;
+    }
+
+    if (shaderOk && computeOk) {
         shaderValid = true;
+        computeValid = true;
         hintMessage = "Shader reloaded!";
         std::cout << "Shader compiled successfully!" << std::endl;
     } else {
-        shaderValid = false;
-        compileErrorPopupMessage = "Shader compilation failed:\n" + compileError;
+        shaderValid = shaderOk;
+        computeValid = computeOk;
         showCompileErrorPopup = true;
         compileErrorPopupTimer = 0.0f;
-        std::cerr << "Shader compilation failed: " << compileError << std::endl;
+        std::cerr << "Shader compilation failed: " << compileErrorPopupMessage << std::endl;
     }
 }
 
-static std::string extractFirstShaderStage(const std::string& source)
+std::string App::extractFirstShaderStage(const std::string& source)
 {
     size_t first = source.find("#version");
     if (first == std::string::npos) {
@@ -496,10 +514,12 @@ static std::string extractFirstShaderStage(const std::string& source)
     return source.substr(first, second - first);
 }
 
-bool App::compileComputeShader()
+bool App::compileComputeShader(bool showPopup)
 {
     computeCompileError.clear();
-    compileErrorPopupMessage.clear();
+    if (!showPopup) {
+        compileErrorPopupMessage.clear();
+    }
     std::string computeSource = extractFirstShaderStage(computeCode);
 
     if (computeShader.compileCompute(computeSource, computeCompileError)) {
@@ -509,9 +529,11 @@ bool App::compileComputeShader()
         return true;
     } else {
         computeValid = false;
-        compileErrorPopupMessage = "Compute shader compilation failed:\n" + computeCompileError;
-        showCompileErrorPopup = true;
-        compileErrorPopupTimer = 0.0f;
+        if (showPopup) {
+            compileErrorPopupMessage = "Compute shader compilation failed:\n" + computeCompileError;
+            showCompileErrorPopup = true;
+            compileErrorPopupTimer = 0.0f;
+        }
         std::cerr << "Compute shader compilation failed: " << computeCompileError << std::endl;
         return false;
     }

@@ -27,7 +27,7 @@ public:
 private:
     void renderUI();
     void compileShader();
-    bool compileComputeShader();
+    bool compileComputeShader(bool showPopup = true);
     void renderScene();
     void updateBuffers();
     void createComputeTexture(int width, int height);
@@ -39,6 +39,7 @@ private:
     bool savePreset(const std::string& name, const std::string& vertex, const std::string& fragment, const std::string& compute, bool computeEnabled, std::string& errorOut) const;
     bool deletePreset(const std::string& name, std::string& errorOut) const;
     bool loadPreset(const std::string& name, ShaderPreset& preset, std::string& errorOut) const;
+    static std::string extractFirstShaderStage(const std::string& source);
 
     // GLFW
     GLFWwindow* window;
