@@ -375,7 +375,7 @@ void App::run()
         // -------------------------
         if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS)
         {
-            compileShader();
+            compileShader(true);
             showHint = true;
             hintTimer = 0.0f;
         }
@@ -460,7 +460,7 @@ void App::renderUI()
         {
             if (ImGui::MenuItem("Reload (F5)"))
             {
-                compileShader();
+                compileShader(true);
                 showHint = true;
                 hintTimer = 0.0f;
             }
@@ -480,7 +480,7 @@ void App::renderUI()
                 computeCode = defaultComputeShader;
                 useComputeShader = false;
 
-                compileShader();
+                compileShader(true);
                 compileComputeShader();
 
                 showHint = true;
@@ -661,7 +661,7 @@ void App::renderUI()
 
         bool prevParticleMode = useParticleMode;
         ImGui::Checkbox("Particle rendering", &useParticleMode);
-        ImGui::TextWrapped("Particle mode uses the current vertex/fragment shader to draw points from the SSBO.\n" \
+        ImGui::TextWrapped("Particle mode uses the current vertex/fragment shader to draw points from the SSBO.\n"
                          "Vertex shader inputs should match the particle buffer layout at locations 0, 1, and 2.");
 
         if (useComputeShader != prevUse)
@@ -677,11 +677,11 @@ void App::renderUI()
                 destroyComputeTexture();
             }
 
-            compileShader();
+            compileShader(useParticleMode);
         }
         else if (useParticleMode != prevParticleMode)
         {
-            compileShader();
+            compileShader(true);
         }
 
         static char computeBuf[16384];
@@ -693,6 +693,7 @@ void App::renderUI()
         if (ImGui::Button("Compile Compute"))
             compileComputeShader();
 
+        ImGui::SameLine();
         if (ImGui::Button("Reset"))
         {
             computeCode = defaultComputeShader;
@@ -703,7 +704,7 @@ void App::renderUI()
     }
 }
 
-void App::compileShader()
+void App::compileShader(bool resetParticles)
 {
     shaderValid = false;
     computeValid = false;
@@ -781,6 +782,13 @@ void App::compileShader()
         hintMessage = msg.str();
 
         std::cout << hintMessage << std::endl;
+
+        if (resetParticles)
+        {
+            if (useParticleMode)
+                resetParticleState();
+            time = 0.0f;
+        }
 
         showHint = true;
         hintTimer = 0.0f;
@@ -990,6 +998,40 @@ void App::createParticleBuffers(int count)
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
+}
+
+void App::resetParticleState()
+{
+    if (!particleBuffer || particleCount <= 0)
+        return;
+
+    struct Particle {
+        float position[4];
+        float velocity[4];
+        float mass;
+        float padding[3];
+    };
+
+    std::vector<Particle> particles(particleCount);
+    for (int i = 0; i < particleCount; ++i) {
+        float t = (float)i / (float)particleCount;
+        float angle = t * 6.2831853f * 4.0f;
+        float radius = 0.25f + 0.5f * t;
+        particles[i].position[0] = radius * cos(angle);
+        particles[i].position[1] = radius * sin(angle);
+        particles[i].position[2] = 0.0f;
+        particles[i].position[3] = 1.0f;
+        particles[i].velocity[0] = 0.0f;
+        particles[i].velocity[1] = 0.0f;
+        particles[i].velocity[2] = 0.0f;
+        particles[i].velocity[3] = 0.0f;
+        particles[i].mass = 1.0f;
+        particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, particleBuffer);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, particleCount * sizeof(Particle), particles.data());
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 std::filesystem::path App::getExecutableDirectory()
@@ -1330,7 +1372,7 @@ void App::renderSavedShadersWindow()
                 computeCode = loaded.computeCode;
                 useComputeShader = loaded.useComputeShader;
                 useParticleMode = loaded.useParticleMode;
-                compileShader();
+                compileShader(true);
                 compileComputeShader();
                 hintMessage = "Loaded preset '" + selectedPreset + "'.";
             } else {

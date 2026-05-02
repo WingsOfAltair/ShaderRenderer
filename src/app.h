@@ -28,13 +28,14 @@ public:
 
 private:
     void renderUI();
-    void compileShader();
+    void compileShader(bool resetParticles = false);
     bool compileComputeShader(bool showPopup = true);
     void renderScene();
     void updateBuffers();
     void createComputeTexture(int width, int height);
     void destroyComputeTexture();
     void createParticleBuffers(int count);
+    void resetParticleState();
     void destroyParticleBuffers();
     void renderSavedShadersWindow();
     std::vector<ShaderPreset> getPresets() const;
