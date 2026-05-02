@@ -140,12 +140,13 @@ void App::destroyFBO(GLuint& fbo, GLuint& tex)
 
 App::App()
     : window(nullptr), windowWidth(1280), windowHeight(720),
-      shaderValid(false), computeValid(false), useComputeShader(false),
+      shaderValid(false), computeValid(false), useComputeShader(false), useParticleMode(false),
+      computeTexture(0), particleVAO(0), particleBuffer(0), particleCount(0),
       time(0.0f),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       hintTimer(0.0f), showHint(false),
       showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
-      VAO(0), VBO(0), computeTexture(0), selectedPreset(""), newPresetName(""), errorTexture(0)
+      VAO(0), VBO(0), selectedPreset(""), newPresetName(""), errorTexture(0)
 {
 }
 
@@ -299,6 +300,7 @@ bool App::init(int width, int height, const char* title)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_DEBUG_OUTPUT);
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    glEnable(GL_PROGRAM_POINT_SIZE);
 
     glDebugMessageCallback([](GLenum source, GLenum type, GLuint id,
                             GLenum severity, GLsizei length,
@@ -328,13 +330,14 @@ bool App::init(int width, int height, const char* title)
     displayShader.compile(defaultDisplayVertexShader, defaultDisplayFragmentShader, compileError);
     std::cout << "Display shader compile: " << compileError << std::endl;
 
-    // Create fullscreen quad and compute resources
+    // Create fullscreen quad, particle buffers, and compute resources
     if (VAO) glDeleteVertexArrays(1, &VAO);
     if (VBO) glDeleteBuffers(1, &VBO);
     VAO = 0;
     VBO = 0;
 
     updateBuffers();
+    createParticleBuffers(1024);
     loadLogoTexture();
     createErrorTexture();
 
@@ -427,6 +430,7 @@ void App::shutdown()
     }
 
     destroyComputeTexture();
+    destroyParticleBuffers();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -655,11 +659,16 @@ void App::renderUI()
         bool prevUse = useComputeShader;
         ImGui::Checkbox("Enable compute", &useComputeShader);
 
+        bool prevParticleMode = useParticleMode;
+        ImGui::Checkbox("Particle rendering", &useParticleMode);
+        ImGui::TextWrapped("Particle mode uses the current vertex/fragment shader to draw points from the SSBO.\n" \
+                         "Vertex shader inputs should match the particle buffer layout at locations 0, 1, and 2.");
+
         if (useComputeShader != prevUse)
         {
             if (useComputeShader)
             {
-                createComputeTexture(windowWidth, windowHeight);   // ✅ ADD THIS
+                createComputeTexture(windowWidth, windowHeight);
                 compileComputeShader(true);
             }
             else
@@ -668,6 +677,10 @@ void App::renderUI()
                 destroyComputeTexture();
             }
 
+            compileShader();
+        }
+        else if (useParticleMode != prevParticleMode)
+        {
             compileShader();
         }
 
@@ -916,6 +929,69 @@ void App::destroyComputeTexture()
     }
 }
 
+void App::destroyParticleBuffers()
+{
+    if (particleBuffer) {
+        glDeleteBuffers(1, &particleBuffer);
+        particleBuffer = 0;
+    }
+    if (particleVAO) {
+        glDeleteVertexArrays(1, &particleVAO);
+        particleVAO = 0;
+    }
+    particleCount = 0;
+}
+
+void App::createParticleBuffers(int count)
+{
+    destroyParticleBuffers();
+    if (count <= 0) {
+        return;
+    }
+
+    struct Particle {
+        float position[4];
+        float velocity[4];
+        float mass;
+        float padding[3];
+    };
+
+    std::vector<Particle> particles(count);
+    for (int i = 0; i < count; ++i) {
+        float t = (float)i / (float)count;
+        float angle = t * 6.2831853f * 4.0f;
+        float radius = 0.25f + 0.5f * t;
+        particles[i].position[0] = radius * cos(angle);
+        particles[i].position[1] = radius * sin(angle);
+        particles[i].position[2] = 0.0f;
+        particles[i].position[3] = 1.0f;
+        particles[i].velocity[0] = 0.0f;
+        particles[i].velocity[1] = 0.0f;
+        particles[i].velocity[2] = 0.0f;
+        particles[i].velocity[3] = 0.0f;
+        particles[i].mass = 1.0f;
+        particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
+    }
+
+    particleCount = count;
+    glGenVertexArrays(1, &particleVAO);
+    glGenBuffers(1, &particleBuffer);
+
+    glBindVertexArray(particleVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, particleBuffer);
+    glBufferData(GL_ARRAY_BUFFER, particleCount * sizeof(Particle), particles.data(), GL_DYNAMIC_DRAW);
+
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 4));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 8));
+    glEnableVertexAttribArray(2);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+}
+
 std::filesystem::path App::getExecutableDirectory()
 {
 #ifdef _WIN32
@@ -958,7 +1034,7 @@ std::string App::makeSafePresetName(const std::string& name) const
     return safe;
 }
 
-bool App::savePreset(const std::string& name, const std::string& vertex, const std::string& fragment, const std::string& compute, bool computeEnabled, std::string& errorOut) const
+bool App::savePreset(const std::string& name, const std::string& vertex, const std::string& fragment, const std::string& compute, bool computeEnabled, bool particleModeEnabled, std::string& errorOut) const
 {
     if (name.empty()) {
         errorOut = "Preset name cannot be empty.";
@@ -1002,6 +1078,7 @@ bool App::savePreset(const std::string& name, const std::string& vertex, const s
         return false;
     }
     metaFile << "useCompute=" << (computeEnabled ? "1" : "0") << "\n";
+    metaFile << "useParticleMode=" << (particleModeEnabled ? "1" : "0") << "\n";
     metaFile.close();
 
     return true;
@@ -1103,12 +1180,14 @@ bool App::loadPreset(const std::string& name, ShaderPreset& preset, std::string&
             while (std::getline(metaFile, line)) {
                 if (line.rfind("useCompute=", 0) == 0) {
                     preset.useComputeShader = (line.substr(11) == "1");
-                    break;
+                } else if (line.rfind("useParticleMode=", 0) == 0) {
+                    preset.useParticleMode = (line.substr(16) == "1");
                 }
             }
         }
     } else {
         preset.useComputeShader = false;
+        preset.useParticleMode = false;
     }
 
     preset.name = name;
@@ -1186,6 +1265,7 @@ void App::renderSavedShadersWindow()
         fragmentCode = defaultFragmentShader;
         computeCode = defaultComputeShader;
         useComputeShader = false;
+        useParticleMode = false;
         compileShader();
         compileComputeShader();
         hintMessage = "New shader created.";
@@ -1195,7 +1275,7 @@ void App::renderSavedShadersWindow()
         std::string error;
         if (newPresetName.empty()) {
             hintMessage = "Enter a name before saving.";
-        } else if (savePreset(newPresetName, vertexCode, fragmentCode, computeCode, useComputeShader, error)) {
+        } else if (savePreset(newPresetName, vertexCode, fragmentCode, computeCode, useComputeShader, useParticleMode, error)) {
             selectedPreset = makeSafePresetName(newPresetName);
             hintMessage = "Saved preset '" + selectedPreset + "'.";
         } else {
@@ -1208,7 +1288,7 @@ void App::renderSavedShadersWindow()
             hintMessage = "Select a preset to update.";
         } else {
             std::string error;
-            if (savePreset(selectedPreset, vertexCode, fragmentCode, computeCode, useComputeShader, error)) {
+            if (savePreset(selectedPreset, vertexCode, fragmentCode, computeCode, useComputeShader, useParticleMode, error)) {
                 hintMessage = "Updated preset '" + selectedPreset + "'.";
             } else {
                 hintMessage = error;
@@ -1249,6 +1329,7 @@ void App::renderSavedShadersWindow()
                 fragmentCode = loaded.fragmentCode;
                 computeCode = loaded.computeCode;
                 useComputeShader = loaded.useComputeShader;
+                useParticleMode = loaded.useParticleMode;
                 compileShader();
                 compileComputeShader();
                 hintMessage = "Loaded preset '" + selectedPreset + "'.";
@@ -1275,26 +1356,59 @@ void App::renderScene()
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    glBindVertexArray(VAO);
-
     bool renderOk = shaderValid;
-
     if (useComputeShader)
     {
         renderOk = renderOk && computeValid;
     }
 
+    if (useParticleMode)
+    {
+        if (renderOk && particleCount > 0 && particleVAO != 0)
+        {
+            if (useComputeShader)
+            {
+                computeShader.use();
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleBuffer);
+                computeShader.setFloat("uTime", time);
+                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
+                computeShader.setFloat("gravityIntensity", 1.0f);
+                computeShader.setFloat("k", 1.0f);
+                computeShader.setInt("increaseK", 0);
+                computeShader.setFloat("dt", 0.016f);
+                glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
+                glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+
+                GLenum err = glGetError();
+                if (err != GL_NO_ERROR)
+                {
+                    std::cerr << "GL ERROR after compute: " << err << std::endl;
+                }
+            }
+
+            shader.use();
+            shader.setMat4("viewProjection", glm::mat4(1.0f));
+            shader.setVec3("baseColor", 1.0f, 1.0f, 1.0f);
+            shader.setFloat("uTime", time);
+            shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+            shader.setVec2("uMouse", 0.0f, 0.0f);
+
+            glBindVertexArray(particleVAO);
+            glDrawArrays(GL_POINTS, 0, particleCount);
+            glBindVertexArray(0);
+            return;
+        }
+    }
+
+    glBindVertexArray(VAO);
+
     if (renderOk)
     {
-        // ============================
-        // STEP 1: RUN COMPUTE (if enabled)
-        // ============================
         if (useComputeShader)
         {
             computeShader.use();
-
             glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
-
             computeShader.setFloat("uTime", time);
             computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
 
@@ -1313,24 +1427,16 @@ void App::renderScene()
             }
         }
 
-        // ============================
-        // STEP 2: DRAW
-        // ============================
-
         if (useComputeShader)
         {
-            // Show compute output
             displayShader.use();
             displayShader.setInt("uTexture", 0);
-
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, computeTexture);
         }
         else
         {
-            // Normal fragment shader
             shader.use();
-
             shader.setFloat("uTime", time);
             shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
             shader.setVec2("uMouse", 0.0f, 0.0f);
@@ -1340,18 +1446,13 @@ void App::renderScene()
     }
     else
     {
-        // fallback (logo/error)
-
         displayShader.use();
         displayShader.setInt("uTexture", 0);
-
         glActiveTexture(GL_TEXTURE0);
-
         if (logoLoaded && logoTexture != 0)
             glBindTexture(GL_TEXTURE_2D, logoTexture);
         else
             glBindTexture(GL_TEXTURE_2D, errorTexture);
-
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 

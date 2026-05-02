@@ -14,6 +14,7 @@ struct ShaderPreset {
     std::string fragmentCode;
     std::string computeCode;
     bool useComputeShader = false;
+    bool useParticleMode = false;
 };
 
 class App {
@@ -33,11 +34,13 @@ private:
     void updateBuffers();
     void createComputeTexture(int width, int height);
     void destroyComputeTexture();
+    void createParticleBuffers(int count);
+    void destroyParticleBuffers();
     void renderSavedShadersWindow();
     std::vector<ShaderPreset> getPresets() const;
     std::filesystem::path getShadersFolder() const;
     std::string makeSafePresetName(const std::string& name) const;
-    bool savePreset(const std::string& name, const std::string& vertex, const std::string& fragment, const std::string& compute, bool computeEnabled, std::string& errorOut) const;
+    bool savePreset(const std::string& name, const std::string& vertex, const std::string& fragment, const std::string& compute, bool computeEnabled, bool particleModeEnabled, std::string& errorOut) const;
     bool deletePreset(const std::string& name, std::string& errorOut) const;
     bool loadPreset(const std::string& name, ShaderPreset& preset, std::string& errorOut) const;
     static std::string extractFirstShaderStage(const std::string& source);
@@ -65,7 +68,11 @@ private:
     bool shaderValid;
     bool computeValid;
     bool useComputeShader;
+    bool useParticleMode;
     unsigned int computeTexture;
+    GLuint particleVAO;
+    GLuint particleBuffer;
+    int particleCount;
     float time;
     float lastFrameTime;
     int frameCount;
