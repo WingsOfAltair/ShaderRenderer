@@ -146,7 +146,7 @@ App::App()
       pingPongTexA(0), pingPongTexB(0), pingPongReadTex(0), pingPongWriteTex(0),
       usePingPong(false), needsPingPongInit(true),
       particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
-      time(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
+      time(0.0f), simulationTime(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       hintTimer(0.0f), showHint(false),
       showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
@@ -399,6 +399,7 @@ void App::run()
             deltaTime = 0.1f;
 
         time += deltaTime;
+        simulationTime += deltaTime * simulationSpeed;
         computeDt = deltaTime * simulationSpeed;
 
         // -------------------------
@@ -829,6 +830,7 @@ void App::compileShader(bool resetParticles)
             if (useParticleMode)
                 resetParticleState();
             time = 0.0f;
+            simulationTime = 0.0f;
         }
 
         showHint = true;
@@ -1889,6 +1891,8 @@ void App::renderScene()
                     initComputeShader.use();
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleWriteBuffer);
+                    initComputeShader.setFloat("uTime", simulationTime);
+                    initComputeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
                     initComputeShader.setFloat("dt", computeDt);
                     initComputeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
                     initComputeShader.setFloat("gravityIntensity", 1.0f);
@@ -1908,11 +1912,13 @@ void App::renderScene()
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
                     GLuint writeBuffer = particleWriteBuffer ? particleWriteBuffer : particleReadBuffer;
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, writeBuffer);
-                    computeShader.setFloat("dt", computeDt);
+                    computeShader.setFloat("uTime", simulationTime);
+                    computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
                     computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
                     computeShader.setFloat("gravityIntensity", 1.0f);
                     computeShader.setFloat("k", 0.1f);
                     computeShader.setInt("increaseK", 0);
+                    computeShader.setFloat("dt", computeDt);
                     glDispatchCompute((GLuint)updateDispatchCount, 1, 1);
                     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
                     if (particleWriteBuffer && particleWriteBuffer != particleReadBuffer)
@@ -1929,9 +1935,10 @@ void App::renderScene()
             shader.use();
             shader.setMat4("viewProjection", glm::mat4(1.0f));
             shader.setVec3("baseColor", 1.0f, 1.0f, 1.0f);
-            shader.setFloat("uTime", time);
+            shader.setFloat("uTime", simulationTime);
             shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
             shader.setVec2("uMouse", 0.0f, 0.0f);
+            shader.setFloat("dt", computeDt);
 
             glBindVertexArray(particleVAO);
             glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
@@ -1982,6 +1989,8 @@ void App::renderScene()
                 int ly = parseLocalSize(updateSrc, "y", 8);
 
                 computeShader.use();
+                computeShader.setFloat("uTime", simulationTime);
+                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
                 glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  GL_R8UI);
                 glBindImageTexture(1, pingPongWriteTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8UI);
                 glDispatchCompute(
@@ -1989,7 +1998,7 @@ void App::renderScene()
                     ((GLuint)windowHeight + ly - 1) / ly,
                     1
                 );
-                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
                 std::swap(pingPongReadTex, pingPongWriteTex);
 
                 GLenum err = glGetError();
@@ -2002,26 +2011,28 @@ void App::renderScene()
                 shader.setVec2("resolution", (float)windowWidth, (float)windowHeight);
                 shader.setVec2("offset",     0.0f, 0.0f);
                 shader.setFloat("scale",     1.0f);
-                shader.setFloat("uTime",     time);
+                shader.setFloat("uTime",     simulationTime);
+                shader.setFloat("dt", computeDt);
             }
             else
             {
                 // ---- standard rgba32f compute path ----
                 computeShader.use();
                 glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
-                computeShader.setFloat("uTime", time);
+                computeShader.setFloat("uTime", simulationTime);
                 computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
                 computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
                 computeShader.setFloat("gravityIntensity", 1.0f);
                 computeShader.setFloat("k", 0.1f);
                 computeShader.setInt("increaseK", 0);
+                computeShader.setFloat("dt", computeDt);
 
                 glDispatchCompute(
                     (GLuint)(windowWidth  + 15) / 16,
                     (GLuint)(windowHeight + 15) / 16,
                     1
                 );
-                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
                 GLenum err = glGetError();
                 if (err != GL_NO_ERROR)
@@ -2037,9 +2048,10 @@ void App::renderScene()
         else
         {
             shader.use();
-            shader.setFloat("uTime", time);
+            shader.setFloat("uTime", simulationTime);
             shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
             shader.setVec2("uMouse", 0.0f, 0.0f);
+            shader.setFloat("dt", computeDt);
         }
 
         glDrawArrays(GL_TRIANGLES, 0, 6);

@@ -112,7 +112,8 @@ private:
     GLuint particleReadBuffer;
     GLuint particleWriteBuffer;
     int particleCount;
-    float time;
+        float time;
+    float simulationTime;   // time accumulated at simulationSpeed scale — drives compute uTime
     float lastFrameTime;
     int frameCount;
     float fps;
