@@ -69,6 +69,7 @@ private:
     void loadLogoTexture();
     void createFBO(GLuint& fbo, GLuint& tex);
     void destroyFBO(GLuint& fbo, GLuint& tex);
+    void handleResize();
     static std::filesystem::path getExecutableDirectory();
     void requestShutdown();
 
@@ -76,6 +77,9 @@ private:
     GLFWwindow* window;
     int windowWidth;
     int windowHeight;
+    int pendingWidth;
+    int pendingHeight;
+    bool pendingResize;
 
     // Shader
     Shader shader;
@@ -170,6 +174,7 @@ private:
     GLuint shaderTex = 0;
 
     bool shuttingDown = false;
+    bool forceRecompute = false;
+    bool framebufferResized = false;
 };
-
 

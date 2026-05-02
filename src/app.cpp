@@ -107,6 +107,15 @@ void main() {
 
 void App::createFBO(GLuint& fbo, GLuint& tex)
 {
+    int w = (windowWidth > 0) ? windowWidth : 1;
+    int h = (windowHeight > 0) ? windowHeight : 1;
+
+    if (w != windowWidth || h != windowHeight)
+    {
+        std::cerr << "Clamping FBO size from " << windowWidth << "x" << windowHeight
+                  << " to " << w << "x" << h << std::endl;
+    }
+
     glGenFramebuffers(1, &fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
@@ -114,7 +123,7 @@ void App::createFBO(GLuint& fbo, GLuint& tex)
     glBindTexture(GL_TEXTURE_2D, tex);
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
-        windowWidth, windowHeight, 0,
+        w, h, 0,
         GL_RGBA, GL_FLOAT, nullptr);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -132,14 +141,36 @@ void App::createFBO(GLuint& fbo, GLuint& tex)
 
 void App::destroyFBO(GLuint& fbo, GLuint& tex)
 {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (tex) glDeleteTextures(1, &tex);
     if (fbo) glDeleteFramebuffers(1, &fbo);
     tex = 0;
     fbo = 0;
 }
 
+void App::handleResize()
+{
+    pendingResize = false;
+    windowWidth = pendingWidth;
+    windowHeight = pendingHeight;
+
+    glViewport(0, 0, windowWidth, windowHeight);
+
+    destroyFBO(backgroundFBO, backgroundTex);
+    destroyFBO(shaderFBO, shaderTex);
+
+    createFBO(backgroundFBO, backgroundTex);
+    createFBO(shaderFBO, shaderTex);
+
+    destroyComputeTexture();
+    createComputeTexture(windowWidth, windowHeight);
+
+    needsPingPongInit = false;
+    forceRecompute = false;
+}
+
 App::App()
-    : window(nullptr), windowWidth(1280), windowHeight(720),
+    : window(nullptr), windowWidth(1280), windowHeight(720), pendingWidth(1280), pendingHeight(720), pendingResize(false),
       shaderValid(false), computeValid(false), initComputeValid(false), useComputeShader(false), useParticleMode(false),
       useDualComputeShader(false), needInitDispatch(false), particleHasForce(true),
       computeTexture(0),
@@ -264,11 +295,13 @@ bool App::init(int width, int height, const char* title)
         return false;
     }
     glfwMakeContextCurrent(window);
+    glfwSetWindowUserPointer(window, this);
 
     glfwSetWindowCloseCallback(window, [](GLFWwindow* w)
     {
         auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
-        app->requestShutdown();
+        if (app)
+            app->requestShutdown();
     });
 
     if (!gladLoadGL(glfwGetProcAddress)) {
@@ -281,20 +314,12 @@ bool App::init(int width, int height, const char* title)
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int ww, int hh)
     {
         auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
+        if (!app)
+            return;
 
-        app->windowWidth = ww;
-        app->windowHeight = hh;
-
-        glViewport(0, 0, ww, hh);
-
-        app->destroyFBO(app->backgroundFBO, app->backgroundTex);
-        app->destroyFBO(app->shaderFBO, app->shaderTex);
-
-        app->createFBO(app->backgroundFBO, app->backgroundTex);
-        app->createFBO(app->shaderFBO, app->shaderTex);
-
-        app->destroyComputeTexture();
-        app->createComputeTexture(ww, hh);
+        app->pendingWidth = (ww > 0) ? ww : 1;
+        app->pendingHeight = (hh > 0) ? hh : 1;
+        app->pendingResize = true;
     });
 
     glfwSetWindowUserPointer(window, this);
@@ -354,6 +379,18 @@ bool App::init(int width, int height, const char* title)
     lastFrameTime = (float)glfwGetTime();
     computeDt = 0.016f;
 
+    // FIX: ensure textures exist before seeding
+    createPingPongTextures(width, height);
+
+    pingPongReadTex = pingPongTexA;
+    pingPongWriteTex = pingPongTexB;
+
+    seedPingPongTexture(pingPongReadTex, width, height);
+    seedPingPongTexture(pingPongWriteTex, width, height);
+
+    needsPingPongInit = false;
+    forceRecompute = false;
+
     return true;
 }
 
@@ -373,6 +410,9 @@ void App::run()
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
+
+        if (pendingResize)
+            handleResize();
 
         if (shuttingDown)
             break;
@@ -1216,12 +1256,29 @@ void App::createComputeTexture(int width, int height)
         computeTexture = 0;
     }
 
-    if (width <= 0 || height <= 0)
-        return;
+    int w = (width > 0) ? width : 1;
+    int h = (height > 0) ? height : 1;
+    if (w != width || h != height)
+    {
+        std::cerr << "Clamping compute texture size from " << width << "x" << height
+                  << " to " << w << "x" << h << std::endl;
+    }
 
     // r8ui ping-pong path — two textures managed separately
-    if (usePingPong) {
-        createPingPongTextures(width, height);
+    if (usePingPong)
+    {
+        createPingPongTextures(w, h);
+
+        // 🔥 FIX: always reset + seed AFTER creation
+        pingPongReadTex = pingPongTexA;
+        pingPongWriteTex = pingPongTexB;
+
+        seedPingPongTexture(pingPongReadTex, w, h);
+        seedPingPongTexture(pingPongWriteTex, w, h);
+
+        forceRecompute = true;
+        needsPingPongInit = false;
+
         return;
     }
 
@@ -1237,6 +1294,10 @@ void App::createComputeTexture(int width, int height)
 
 void App::destroyComputeTexture()
 {
+    glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY,  GL_R8UI);
+    glBindImageTexture(1, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8UI);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
     if (computeTexture) {
         glDeleteTextures(1, &computeTexture);
         computeTexture = 0;
@@ -1278,6 +1339,9 @@ void App::createPingPongTextures(int width, int height)
 
 void App::seedPingPongTexture(GLuint tex, int width, int height)
 {
+    if (!tex || width <= 0 || height <= 0)
+        return;
+
     std::vector<unsigned char> data(width * height);
     for (auto& cell : data)
         cell = (rand() % 5 == 0) ? 1u : 0u;  // ~20% alive
@@ -1865,6 +1929,9 @@ void App::renderSavedShadersWindow()
 
 void App::renderScene()
 {
+    if (windowWidth <= 0 || windowHeight <= 0)
+        return;
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, windowWidth, windowHeight);
 
@@ -1965,6 +2032,9 @@ void App::renderScene()
         }
     }
 
+    if (windowWidth <= 0 || windowHeight <= 0)
+        return;
+
     glBindVertexArray(VAO);
 
     if (renderOk)
@@ -1978,7 +2048,11 @@ void App::renderScene()
                 // Seed the read texture once on first frame / after recompile
                 if (needsPingPongInit && pingPongReadTex)
                 {
-                    seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
+                    if (pingPongReadTex)
+                        seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
+
+                    if (pingPongWriteTex)
+                        seedPingPongTexture(pingPongWriteTex, windowWidth, windowHeight);
                     needsPingPongInit = false;
                 }
 
@@ -1991,15 +2065,22 @@ void App::renderScene()
                 computeShader.use();
                 computeShader.setFloat("uTime", simulationTime);
                 computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  GL_R8UI);
-                glBindImageTexture(1, pingPongWriteTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8UI);
-                glDispatchCompute(
-                    ((GLuint)windowWidth  + lx - 1) / lx,
-                    ((GLuint)windowHeight + ly - 1) / ly,
-                    1
-                );
-                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
-                std::swap(pingPongReadTex, pingPongWriteTex);
+                if (!pingPongReadTex || !pingPongWriteTex)
+                {
+                    std::cerr << "Ping-pong textures invalid during resize or compile; skipping compute pass.\n";
+                }
+                else
+                {
+                    glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  GL_R8UI);
+                    glBindImageTexture(1, pingPongWriteTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8UI);
+                    glDispatchCompute(
+                        ((GLuint)windowWidth  + lx - 1) / lx,
+                        ((GLuint)windowHeight + ly - 1) / ly,
+                        1
+                    );
+                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+                    std::swap(pingPongReadTex, pingPongWriteTex);
+                }
 
                 GLenum err = glGetError();
                 if (err != GL_NO_ERROR)
@@ -2007,7 +2088,14 @@ void App::renderScene()
 
                 // Render pass — user's own fragment shader reads the image directly
                 shader.use();
-                glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
+                if (!pingPongReadTex)
+                {
+                    std::cerr << "Ping-pong read texture invalid during render pass; skipping draw.\n";
+                }
+                else
+                {
+                    glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
+                }
                 shader.setVec2("resolution", (float)windowWidth, (float)windowHeight);
                 shader.setVec2("offset",     0.0f, 0.0f);
                 shader.setFloat("scale",     1.0f);
