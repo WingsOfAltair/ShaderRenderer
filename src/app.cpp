@@ -1345,10 +1345,17 @@ void App::seedPingPongTexture(GLuint tex, int width, int height)
     std::vector<unsigned char> data(width * height);
     for (auto& cell : data)
         cell = (rand() % 5 == 0) ? 1u : 0u;  // ~20% alive
+
+    GLint prevAlignment = 0;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &prevAlignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
     glBindTexture(GL_TEXTURE_2D, tex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height,
                     GL_RED_INTEGER, GL_UNSIGNED_BYTE, data.data());
     glBindTexture(GL_TEXTURE_2D, 0);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, prevAlignment);
 }
 
 void App::destroyParticleBuffers()
