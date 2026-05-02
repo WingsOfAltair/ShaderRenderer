@@ -22,6 +22,12 @@ struct ComputeShaderSources {
     std::string updateSource;
 };
 
+struct CombinedShaderSources {
+    ComputeShaderSources computeSources;
+    std::string vertexSource;
+    std::string fragmentSource;
+};
+
 class App {
 public:
     App();
@@ -40,6 +46,8 @@ private:
     void createComputeTexture(int width, int height);
     void destroyComputeTexture();
     ComputeShaderSources splitComputeShaderSources(const std::string& source) const;
+    CombinedShaderSources splitCombinedShaderSources(const std::string& source) const;
+    bool computeSourceUsesForce(const std::string& source) const;
     void createParticleBuffers(int count);
     void resetParticleState();
     void destroyParticleBuffers();
@@ -81,6 +89,7 @@ private:
     bool useParticleMode;
     bool useDualComputeShader;
     bool needInitDispatch;
+    bool particleHasForce;
     unsigned int computeTexture;
     GLuint particleVAO;
     GLuint particleBufferA;

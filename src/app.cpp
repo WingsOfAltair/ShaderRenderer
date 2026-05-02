@@ -141,7 +141,7 @@ void App::destroyFBO(GLuint& fbo, GLuint& tex)
 App::App()
     : window(nullptr), windowWidth(1280), windowHeight(720),
       shaderValid(false), computeValid(false), initComputeValid(false), useComputeShader(false), useParticleMode(false),
-      useDualComputeShader(false), needInitDispatch(false),
+      useDualComputeShader(false), needInitDispatch(false), particleHasForce(true),
       computeTexture(0), particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
       time(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(100.0f), computeDt(0.016f),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
@@ -737,7 +737,24 @@ void App::compileShader(bool resetParticles)
     // =========================
     // 1. Vertex / Fragment
     // =========================
-    bool shaderOk = shader.compile(vertexCode, fragmentCode, compileError);
+    std::string vertexSource = vertexCode;
+    std::string fragmentSource = fragmentCode;
+    bool extractedStages = false;
+
+    if (useComputeShader)
+    {
+        CombinedShaderSources combined = splitCombinedShaderSources(computeCode);
+        if (!combined.vertexSource.empty() && !combined.fragmentSource.empty())
+        {
+            vertexSource = combined.vertexSource;
+            fragmentSource = combined.fragmentSource;
+            vertexCode = combined.vertexSource;
+            fragmentCode = combined.fragmentSource;
+            extractedStages = true;
+        }
+    }
+
+    bool shaderOk = shader.compile(vertexSource, fragmentSource, compileError);
 
     std::ostringstream popup;
 
@@ -871,67 +888,138 @@ std::string App::extractFirstShaderStage(const std::string& source)
     return source.substr(first, second - first);
 }
 
-ComputeShaderSources App::splitComputeShaderSources(const std::string& source) const
+static std::string toLowerCopy(const std::string& s)
 {
-    ComputeShaderSources result;
+    std::string lower = s;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+    return lower;
+}
 
-    auto findLabelVersion = [&](const std::string& label) -> std::pair<size_t, size_t> {
-        std::string lowerSource = source;
-        std::transform(lowerSource.begin(), lowerSource.end(), lowerSource.begin(), [](unsigned char c) { return std::tolower(c); });
-        std::string lowerLabel = label;
-        std::transform(lowerLabel.begin(), lowerLabel.end(), lowerLabel.begin(), [](unsigned char c) { return std::tolower(c); });
+static std::string trimWhitespace(const std::string& s)
+{
+    size_t start = 0;
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start])))
+        ++start;
+    size_t end = s.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])))
+        --end;
+    return s.substr(start, end - start);
+}
 
-        size_t pos = 0;
-        while (pos < lowerSource.size()) {
-            pos = lowerSource.find(lowerLabel, pos);
-            if (pos == std::string::npos)
-                return {std::string::npos, std::string::npos};
+CombinedShaderSources App::splitCombinedShaderSources(const std::string& source) const
+{
+    CombinedShaderSources result;
+    std::string lowerSource = toLowerCopy(source);
 
-            size_t after = pos + lowerLabel.size();
-            while (after < lowerSource.size() && std::isspace(static_cast<unsigned char>(lowerSource[after])))
-                ++after;
-
-            if (after + 8 <= lowerSource.size() && lowerSource.compare(after, 8, "#version") == 0)
-                return {pos, source.find("#version", after)};
-
-            pos = after;
-        }
-
-        return {std::string::npos, std::string::npos};
+    struct BlockInfo {
+        size_t versionPos;
+        size_t endPos;
+        size_t labelPos;
+        bool isInitLabel;
+        bool isUpdateLabel;
+        std::string text;
     };
 
-    auto [initLabelPos, initVersion] = findLabelVersion("init");
-    auto [updateLabelPos, updateVersion] = findLabelVersion("update");
+    std::vector<BlockInfo> blocks;
+    size_t pos = 0;
 
-    if (initVersion != std::string::npos && updateVersion != std::string::npos && initLabelPos < updateLabelPos) {
-        result.initSource = source.substr(initVersion, updateLabelPos - initVersion);
-        size_t nextVersion = source.find("#version", updateVersion + 1);
-        if (nextVersion == std::string::npos) {
-            result.updateSource = source.substr(updateVersion);
-        } else {
-            result.updateSource = source.substr(updateVersion, nextVersion - updateVersion);
-        }
-        return result;
-    }
+    while (true) {
+        size_t versionPos = lowerSource.find("#version", pos);
+        if (versionPos == std::string::npos)
+            break;
 
-    // Fallback: if two plain #version blocks are present, treat the first as init and the second as update.
-    size_t firstVersion = source.find("#version");
-    if (firstVersion != std::string::npos) {
-        size_t secondVersion = source.find("#version", firstVersion + 8);
-        if (secondVersion != std::string::npos) {
-            result.initSource = source.substr(firstVersion, secondVersion - firstVersion);
-            size_t thirdVersion = source.find("#version", secondVersion + 8);
-            if (thirdVersion == std::string::npos) {
-                result.updateSource = source.substr(secondVersion);
-            } else {
-                result.updateSource = source.substr(secondVersion, thirdVersion - secondVersion);
+        size_t lineStart = lowerSource.rfind('\n', versionPos);
+        if (lineStart == std::string::npos)
+            lineStart = 0;
+        else
+            lineStart += 1;
+
+        std::string line = trimWhitespace(source.substr(lineStart, versionPos - lineStart));
+        bool isInitLabel = false;
+        bool isUpdateLabel = false;
+        if (!line.empty()) {
+            std::istringstream iss(line);
+            std::string token;
+            if (iss >> token) {
+                std::string lowerToken = toLowerCopy(token);
+                if (lowerToken == "init")
+                    isInitLabel = true;
+                else if (lowerToken == "update")
+                    isUpdateLabel = true;
             }
-            return result;
+        }
+
+        size_t nextVersion = lowerSource.find("#version", versionPos + 8);
+        size_t endPos = (nextVersion == std::string::npos) ? source.size() : nextVersion;
+        std::string blockText = source.substr(versionPos, endPos - versionPos);
+
+        blocks.push_back({versionPos, endPos, lineStart, isInitLabel, isUpdateLabel, blockText});
+        if (nextVersion == std::string::npos)
+            break;
+        pos = nextVersion;
+    }
+
+    auto classify = [&](const std::string& text) {
+        std::string lowerText = toLowerCopy(text);
+        if (lowerText.find("local_size_") != std::string::npos || lowerText.find("gl_globalinvocationid") != std::string::npos)
+            return 0;
+        if (lowerText.find("gl_position") != std::string::npos || lowerText.find("layout(location = 0) in") != std::string::npos || lowerText.find("gl_pervertex") != std::string::npos)
+            return 1;
+        if (lowerText.find("fragcolor") != std::string::npos || lowerText.find("gl_fragcolor") != std::string::npos || lowerText.find("out vec4") != std::string::npos || lowerText.find("texture(") != std::string::npos)
+            return 2;
+        return 3;
+    };
+
+    std::vector<BlockInfo*> computeBlocks;
+    BlockInfo* initBlock = nullptr;
+    BlockInfo* updateBlock = nullptr;
+    BlockInfo* vertexBlock = nullptr;
+    BlockInfo* fragmentBlock = nullptr;
+
+    for (auto& block : blocks) {
+        int type = classify(block.text);
+        if (type == 0) {
+            computeBlocks.push_back(&block);
+            if (block.isInitLabel)
+                initBlock = &block;
+            if (block.isUpdateLabel)
+                updateBlock = &block;
+        } else if (type == 1 && !vertexBlock) {
+            vertexBlock = &block;
+        } else if (type == 2 && !fragmentBlock) {
+            fragmentBlock = &block;
         }
     }
 
-    result.updateSource = extractFirstShaderStage(source);
+    if (initBlock && updateBlock && initBlock->versionPos < updateBlock->versionPos) {
+        result.computeSources.initSource = source.substr(initBlock->versionPos, updateBlock->labelPos - initBlock->versionPos);
+        result.computeSources.updateSource = source.substr(updateBlock->versionPos, updateBlock->endPos - updateBlock->versionPos);
+    } else if (computeBlocks.size() >= 2) {
+        result.computeSources.initSource = computeBlocks[0]->text;
+        result.computeSources.updateSource = computeBlocks[1]->text;
+    } else if (computeBlocks.size() == 1) {
+        result.computeSources.updateSource = computeBlocks[0]->text;
+    }
+
+    if (vertexBlock)
+        result.vertexSource = vertexBlock->text;
+    if (fragmentBlock)
+        result.fragmentSource = fragmentBlock->text;
+
     return result;
+}
+
+ComputeShaderSources App::splitComputeShaderSources(const std::string& source) const
+{
+    return splitCombinedShaderSources(source).computeSources;
+}
+
+bool App::computeSourceUsesForce(const std::string& source) const
+{
+    std::string lowerSource = toLowerCopy(source);
+    return lowerSource.find("vec4 force") != std::string::npos ||
+           lowerSource.find("particles_out[gidx].force") != std::string::npos ||
+           lowerSource.find("particles_in[gidx].force") != std::string::npos;
 }
 
 bool App::compileComputeShader(bool showPopup)
@@ -951,7 +1039,41 @@ bool App::compileComputeShader(bool showPopup)
         compileErrorPopupMessage.clear();
     }
 
-    ComputeShaderSources sources = splitComputeShaderSources(computeCode);
+    CombinedShaderSources combined = splitCombinedShaderSources(computeCode);
+    ComputeShaderSources sources = combined.computeSources;
+
+    bool newParticleHasForce = computeSourceUsesForce(sources.initSource + sources.updateSource);
+    if (newParticleHasForce != particleHasForce)
+    {
+        particleHasForce = newParticleHasForce;
+        if (particleCount > 0)
+        {
+            createParticleBuffers(particleCount);
+            if (useParticleMode)
+                resetParticleState();
+        }
+    }
+
+    if (!combined.vertexSource.empty() && !combined.fragmentSource.empty())
+    {
+        vertexCode = combined.vertexSource;
+        fragmentCode = combined.fragmentSource;
+
+        std::string vertexFragError;
+        bool shaderOk = shader.compile(vertexCode, fragmentCode, vertexFragError);
+        if (!shaderOk)
+        {
+            compileError = vertexFragError;
+            if (showPopup)
+            {
+                compileErrorPopupMessage = "Vertex/Fragment compilation failed while importing from compute source.\n" + compileError;
+                showCompileErrorPopup = true;
+                compileErrorPopupTimer = 0.0f;
+            }
+            return false;
+        }
+        shaderValid = true;
+    }
 
     bool initOk = true;
     if (!sources.initSource.empty())
@@ -1069,60 +1191,114 @@ void App::createParticleBuffers(int count)
         return;
     }
 
-    struct Particle {
-        float position[4];
-        float velocity[4];
-        float force[4];
-        float mass;
-        float padding[3];
-    };
+    if (particleHasForce)
+    {
+        struct Particle {
+            float position[4];
+            float velocity[4];
+            float force[4];
+            float mass;
+            float padding[3];
+        };
 
-    std::vector<Particle> particles(count);
-    for (int i = 0; i < count; ++i) {
-        float t = (float)i / (float)count;
-        float angle = t * 6.2831853f * 4.0f;
-        float radius = 0.25f + 0.5f * t;
-        particles[i].position[0] = radius * cos(angle);
-        particles[i].position[1] = radius * sin(angle);
-        particles[i].position[2] = 0.0f;
-        particles[i].position[3] = 1.0f;
-        particles[i].velocity[0] = 0.0f;
-        particles[i].velocity[1] = 0.0f;
-        particles[i].velocity[2] = 0.0f;
-        particles[i].velocity[3] = 0.0f;
-        particles[i].force[0] = 0.0f;
-        particles[i].force[1] = 0.0f;
-        particles[i].force[2] = 0.0f;
-        particles[i].force[3] = 0.0f;
-        particles[i].mass = 1.0f;
-        particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
+        std::vector<Particle> particles(count);
+        for (int i = 0; i < count; ++i) {
+            float t = (float)i / (float)count;
+            float angle = t * 6.2831853f * 4.0f;
+            float radius = 0.25f + 0.5f * t;
+            particles[i].position[0] = radius * cos(angle);
+            particles[i].position[1] = radius * sin(angle);
+            particles[i].position[2] = 0.0f;
+            particles[i].position[3] = 1.0f;
+            particles[i].velocity[0] = 0.0f;
+            particles[i].velocity[1] = 0.0f;
+            particles[i].velocity[2] = 0.0f;
+            particles[i].velocity[3] = 0.0f;
+            particles[i].force[0] = 0.0f;
+            particles[i].force[1] = 0.0f;
+            particles[i].force[2] = 0.0f;
+            particles[i].force[3] = 0.0f;
+            particles[i].mass = 1.0f;
+            particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
+        }
+
+        particleCount = count;
+        glGenVertexArrays(1, &particleVAO);
+        glGenBuffers(1, &particleBufferA);
+        glGenBuffers(1, &particleBufferB);
+
+        glBindVertexArray(particleVAO);
+
+        glBindBuffer(GL_ARRAY_BUFFER, particleBufferA);
+        glBufferData(GL_ARRAY_BUFFER, particleCount * sizeof(Particle), particles.data(), GL_DYNAMIC_DRAW);
+
+        glBindBuffer(GL_ARRAY_BUFFER, particleBufferB);
+        glBufferData(GL_ARRAY_BUFFER, particleCount * sizeof(Particle), particles.data(), GL_DYNAMIC_DRAW);
+
+        particleReadBuffer = particleBufferA;
+        particleWriteBuffer = particleBufferB;
+
+        glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 4));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 8));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 12));
+        glEnableVertexAttribArray(3);
     }
+    else
+    {
+        struct Particle {
+            float position[4];
+            float velocity[4];
+            float mass;
+            float padding[3];
+        };
 
-    particleCount = count;
-    glGenVertexArrays(1, &particleVAO);
-    glGenBuffers(1, &particleBufferA);
-    glGenBuffers(1, &particleBufferB);
+        std::vector<Particle> particles(count);
+        for (int i = 0; i < count; ++i) {
+            float t = (float)i / (float)count;
+            float angle = t * 6.2831853f * 4.0f;
+            float radius = 0.25f + 0.5f * t;
+            particles[i].position[0] = radius * cos(angle);
+            particles[i].position[1] = radius * sin(angle);
+            particles[i].position[2] = 0.0f;
+            particles[i].position[3] = 1.0f;
+            particles[i].velocity[0] = 0.0f;
+            particles[i].velocity[1] = 0.0f;
+            particles[i].velocity[2] = 0.0f;
+            particles[i].velocity[3] = 0.0f;
+            particles[i].mass = 1.0f;
+            particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
+        }
 
-    glBindVertexArray(particleVAO);
+        particleCount = count;
+        glGenVertexArrays(1, &particleVAO);
+        glGenBuffers(1, &particleBufferA);
+        glGenBuffers(1, &particleBufferB);
 
-    glBindBuffer(GL_ARRAY_BUFFER, particleBufferA);
-    glBufferData(GL_ARRAY_BUFFER, particleCount * sizeof(Particle), particles.data(), GL_DYNAMIC_DRAW);
+        glBindVertexArray(particleVAO);
 
-    glBindBuffer(GL_ARRAY_BUFFER, particleBufferB);
-    glBufferData(GL_ARRAY_BUFFER, particleCount * sizeof(Particle), particles.data(), GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, particleBufferA);
+        glBufferData(GL_ARRAY_BUFFER, particleCount * sizeof(Particle), particles.data(), GL_DYNAMIC_DRAW);
 
-    particleReadBuffer = particleBufferA;
-    particleWriteBuffer = particleBufferB;
+        glBindBuffer(GL_ARRAY_BUFFER, particleBufferB);
+        glBufferData(GL_ARRAY_BUFFER, particleCount * sizeof(Particle), particles.data(), GL_DYNAMIC_DRAW);
 
-    glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
-    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 4));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 8));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 12));
-    glEnableVertexAttribArray(3);
+        particleReadBuffer = particleBufferA;
+        particleWriteBuffer = particleBufferB;
+
+        glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 4));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 8));
+        glEnableVertexAttribArray(2);
+        glDisableVertexAttribArray(3);
+    }
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
@@ -1133,43 +1309,79 @@ void App::resetParticleState()
     if (!particleBufferA || particleCount <= 0)
         return;
 
-    struct Particle {
-        float position[4];
-        float velocity[4];
-        float force[4];
-        float mass;
-        float padding[3];
-    };
+    if (particleHasForce)
+    {
+        struct Particle {
+            float position[4];
+            float velocity[4];
+            float force[4];
+            float mass;
+            float padding[3];
+        };
 
-    std::vector<Particle> particles(particleCount);
-    for (int i = 0; i < particleCount; ++i) {
-        float t = (float)i / (float)particleCount;
-        float angle = t * 6.2831853f * 4.0f;
-        float radius = 0.25f + 0.5f * t;
-        particles[i].position[0] = radius * cos(angle);
-        particles[i].position[1] = radius * sin(angle);
-        particles[i].position[2] = 0.0f;
-        particles[i].position[3] = 1.0f;
-        particles[i].velocity[0] = 0.0f;
-        particles[i].velocity[1] = 0.0f;
-        particles[i].velocity[2] = 0.0f;
-        particles[i].velocity[3] = 0.0f;
-        particles[i].force[0] = 0.0f;
-        particles[i].force[1] = 0.0f;
-        particles[i].force[2] = 0.0f;
-        particles[i].force[3] = 0.0f;
-        particles[i].mass = 1.0f;
-        particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
-    }
+        std::vector<Particle> particles(particleCount);
+        for (int i = 0; i < particleCount; ++i) {
+            float t = (float)i / (float)particleCount;
+            float angle = t * 6.2831853f * 4.0f;
+            float radius = 0.25f + 0.5f * t;
+            particles[i].position[0] = radius * cos(angle);
+            particles[i].position[1] = radius * sin(angle);
+            particles[i].position[2] = 0.0f;
+            particles[i].position[3] = 1.0f;
+            particles[i].velocity[0] = 0.0f;
+            particles[i].velocity[1] = 0.0f;
+            particles[i].velocity[2] = 0.0f;
+            particles[i].velocity[3] = 0.0f;
+            particles[i].force[0] = 0.0f;
+            particles[i].force[1] = 0.0f;
+            particles[i].force[2] = 0.0f;
+            particles[i].force[3] = 0.0f;
+            particles[i].mass = 1.0f;
+            particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
+        }
 
-    glBindBuffer(GL_ARRAY_BUFFER, particleBufferA);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, particleCount * sizeof(Particle), particles.data());
-    if (particleBufferB) {
-        glBindBuffer(GL_ARRAY_BUFFER, particleBufferB);
+        glBindBuffer(GL_ARRAY_BUFFER, particleBufferA);
         glBufferSubData(GL_ARRAY_BUFFER, 0, particleCount * sizeof(Particle), particles.data());
+        if (particleBufferB) {
+            glBindBuffer(GL_ARRAY_BUFFER, particleBufferB);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, particleCount * sizeof(Particle), particles.data());
+        }
     }
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    else
+    {
+        struct Particle {
+            float position[4];
+            float velocity[4];
+            float mass;
+            float padding[3];
+        };
 
+        std::vector<Particle> particles(particleCount);
+        for (int i = 0; i < particleCount; ++i) {
+            float t = (float)i / (float)particleCount;
+            float angle = t * 6.2831853f * 4.0f;
+            float radius = 0.25f + 0.5f * t;
+            particles[i].position[0] = radius * cos(angle);
+            particles[i].position[1] = radius * sin(angle);
+            particles[i].position[2] = 0.0f;
+            particles[i].position[3] = 1.0f;
+            particles[i].velocity[0] = 0.0f;
+            particles[i].velocity[1] = 0.0f;
+            particles[i].velocity[2] = 0.0f;
+            particles[i].velocity[3] = 0.0f;
+            particles[i].mass = 1.0f;
+            particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
+        }
+
+        glBindBuffer(GL_ARRAY_BUFFER, particleBufferA);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, particleCount * sizeof(Particle), particles.data());
+        if (particleBufferB) {
+            glBindBuffer(GL_ARRAY_BUFFER, particleBufferB);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, particleCount * sizeof(Particle), particles.data());
+        }
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
     particleReadBuffer = particleBufferA;
     particleWriteBuffer = particleBufferB ? particleBufferB : particleBufferA;
 }
@@ -1556,29 +1768,30 @@ void App::renderScene()
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleWriteBuffer);
                     initComputeShader.setFloat("dt", computeDt);
+                    initComputeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
+                    initComputeShader.setFloat("gravityIntensity", 1.0f);
+                    initComputeShader.setFloat("k", 0.1f);
+                    initComputeShader.setInt("increaseK", 0);
                     glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
                     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
                     std::swap(particleReadBuffer, particleWriteBuffer);
                     needInitDispatch = false;
                 }
 
-                if (useDualComputeShader)
                 {
                     computeShader.use();
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
-                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleWriteBuffer);
+                    GLuint writeBuffer = particleWriteBuffer ? particleWriteBuffer : particleReadBuffer;
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, writeBuffer);
                     computeShader.setFloat("dt", computeDt);
+                    computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
+                    computeShader.setFloat("gravityIntensity", 1.0f);
+                    computeShader.setFloat("k", 0.1f);
+                    computeShader.setInt("increaseK", 0);
                     glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
                     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
-                    std::swap(particleReadBuffer, particleWriteBuffer);
-                }
-                else
-                {
-                    computeShader.use();
-                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
-                    computeShader.setFloat("dt", computeDt);
-                    glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
-                    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+                    if (particleWriteBuffer && particleWriteBuffer != particleReadBuffer)
+                        std::swap(particleReadBuffer, particleWriteBuffer);
                 }
 
                 GLenum err = glGetError();
@@ -1597,11 +1810,22 @@ void App::renderScene()
 
             glBindVertexArray(particleVAO);
             glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
-            const GLsizei stride = sizeof(float) * 16;
-            glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (void*)0);
-            glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 4));
-            glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 8));
-            glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 12));
+            if (particleHasForce)
+            {
+                const GLsizei stride = sizeof(float) * 16;
+                glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (void*)0);
+                glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 4));
+                glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 8));
+                glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 12));
+            }
+            else
+            {
+                const GLsizei stride = sizeof(float) * 12;
+                glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (void*)0);
+                glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 4));
+                glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 8));
+                glDisableVertexAttribArray(3);
+            }
             glBindBuffer(GL_ARRAY_BUFFER, 0);
             glDrawArrays(GL_POINTS, 0, particleCount);
             glBindVertexArray(0);
@@ -1619,6 +1843,10 @@ void App::renderScene()
             glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
             computeShader.setFloat("uTime", time);
             computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+            computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
+            computeShader.setFloat("gravityIntensity", 1.0f);
+            computeShader.setFloat("k", 0.1f);
+            computeShader.setInt("increaseK", 0);
 
             glDispatchCompute(
                 (GLuint)(windowWidth + 15) / 16,
