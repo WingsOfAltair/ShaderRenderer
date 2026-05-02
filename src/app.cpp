@@ -2065,7 +2065,7 @@ void App::renderScene()
 
                 // Compute pass
                 CombinedShaderSources combined = splitCombinedShaderSources(computeCode);
-                const std::string& updateSrc = combined.computeSources.updateSource;
+                std::string& updateSrc = combined.computeSources.updateSource;
                 int lx = parseLocalSize(updateSrc, "x", 8);
                 int ly = parseLocalSize(updateSrc, "y", 8);
 
@@ -2112,8 +2112,21 @@ void App::renderScene()
             else
             {
                 // ---- standard rgba32f compute path ----
+                CombinedShaderSources combined = splitCombinedShaderSources(computeCode);
+                const std::string& updateSrc = combined.computeSources.updateSource;
+
                 computeShader.use();
-                glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+                bool bindComputeTextureToBoth = computeSourceUsesWriteBinding1(updateSrc);
+                if (bindComputeTextureToBoth)
+                {
+                    glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_READ_ONLY,  GL_RGBA32F);
+                    glBindImageTexture(1, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+                }
+                else
+                {
+                    glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+                }
+
                 computeShader.setFloat("uTime", simulationTime);
                 computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
                 computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
@@ -2121,6 +2134,13 @@ void App::renderScene()
                 computeShader.setFloat("k", 0.1f);
                 computeShader.setInt("increaseK", 0);
                 computeShader.setFloat("dt", computeDt);
+
+                // Default tone-mapping parameters for shaders that expect them.
+                computeShader.setFloat("exposure", 1.0f);
+                computeShader.setFloat("white", 1.0f);
+                computeShader.setInt("toneMappingType", 2);
+                computeShader.setInt("toneMappingOnRGB", 1);
+                computeShader.setFloat("gamma", 2.2f);
 
                 glDispatchCompute(
                     (GLuint)(windowWidth  + 15) / 16,
