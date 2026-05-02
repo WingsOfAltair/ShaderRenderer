@@ -629,9 +629,12 @@ void App::renderUI()
         ImGui::Checkbox("Enable compute", &useComputeShader);
 
         if (useComputeShader != prevUse)
-        {
+{
             if (useComputeShader)
+            {
+                createComputeTexture(windowWidth, windowHeight);   // ✅ ADD THIS
                 compileComputeShader(true);
+            }
             else
             {
                 computeValid = false;
