@@ -39,6 +39,7 @@ public:
 
 private:
     void renderUI();
+    void renderPlaybackBar();
     void compileShader(bool resetParticles = false);
     bool compileComputeShader(bool showPopup = true);
     void renderScene();
@@ -72,6 +73,7 @@ private:
     void handleResize();
     static std::filesystem::path getExecutableDirectory();
     void requestShutdown();
+
 
     // GLFW
     GLFWwindow* window;
@@ -115,8 +117,8 @@ private:
     GLuint particleBufferB;
     GLuint particleReadBuffer;
     GLuint particleWriteBuffer;
-    int particleCount;
-        float time;
+        int particleCount;
+    float time;
     float simulationTime;   // time accumulated at simulationSpeed scale — drives compute uTime
     float lastFrameTime;
     int frameCount;
@@ -124,17 +126,27 @@ private:
     float simulationSpeed;
     float computeDt;
 
+    // Playback controls
+    bool  isPlaying;
+    float animationDuration;
+    bool  loopAnimation;
+    float fastForwardRate;
+    bool  isFastForwarding;
+    bool  isRewinding;
+    bool  showPlaybackBar;
+
     // Editor
     ShaderEditor vertexEditor;
     ShaderEditor fragmentEditor;
     ShaderEditor computeEditor;
 
-    // UI state
+        // UI state
     bool showHelp;
     bool showSavedShaders;
     bool showVertexEditor;
     bool showFragmentEditor;
     bool showComputeEditor;
+    bool showPlaybackControls;
     float hintTimer;
     bool showHint;
     std::string hintMessage;

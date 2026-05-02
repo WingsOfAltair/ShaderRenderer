@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 #ifdef _WIN32
+#define NOMINMAX
 #include <windows.h>
 #endif
 #define STB_IMAGE_IMPLEMENTATION
@@ -177,8 +178,11 @@ App::App()
       pingPongTexA(0), pingPongTexB(0), pingPongReadTex(0), pingPongWriteTex(0),
       usePingPong(false), needsPingPongInit(true),
       particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
-      time(0.0f), simulationTime(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
+            time(0.0f), simulationTime(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
+      isPlaying(true), animationDuration(60.0f), loopAnimation(true), fastForwardRate(5.0f),
+      isFastForwarding(false), isRewinding(false), showPlaybackBar(true),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
+      showPlaybackControls(true),
       hintTimer(0.0f), showHint(false),
       showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
       VAO(0), VBO(0), selectedPreset(""), newPresetName(""), errorTexture(0)
@@ -438,9 +442,44 @@ void App::run()
         if (deltaTime > 0.1f)
             deltaTime = 0.1f;
 
-        time += deltaTime;
-        simulationTime += deltaTime * simulationSpeed;
-        computeDt = deltaTime * simulationSpeed;
+                time += deltaTime;
+
+        // Reset per-frame FF/RW flags — renderUI() sets them if buttons are held
+        isFastForwarding = false;
+        isRewinding      = false;
+
+        // --- Advance simulation time according to playback state ---
+        if (isPlaying || isFastForwarding || isRewinding)
+        {
+            float effectiveSpeed = simulationSpeed;
+            if (isFastForwarding) effectiveSpeed *= fastForwardRate;
+            if (isRewinding)      effectiveSpeed *= -fastForwardRate;
+
+            float advance  = deltaTime * effectiveSpeed;
+            simulationTime += advance;
+            computeDt      = advance;
+
+            if (loopAnimation)
+            {
+                if (simulationTime >= animationDuration)
+                    simulationTime = fmodf(simulationTime, animationDuration);
+                else if (simulationTime < 0.0f)
+                    simulationTime = animationDuration + fmodf(simulationTime, animationDuration);
+            }
+            else
+            {
+                if (simulationTime >= animationDuration)
+                {
+                    simulationTime = animationDuration;
+                    isPlaying      = false;
+                }
+                simulationTime = std::max(simulationTime, 0.0f);
+            }
+        }
+        else
+        {
+            computeDt = 0.0f;
+        }
 
         // -------------------------
         // UI
@@ -552,13 +591,15 @@ void App::renderUI()
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("View"))
+                if (ImGui::BeginMenu("View"))
         {
             ImGui::MenuItem("Help", nullptr, &showHelp);
             ImGui::MenuItem("Vertex Shader", nullptr, &showVertexEditor);
             ImGui::MenuItem("Fragment Shader", nullptr, &showFragmentEditor);
             ImGui::MenuItem("Compute Shader", nullptr, &showComputeEditor);
             ImGui::MenuItem("Saved Shaders", nullptr, &showSavedShaders);
+            ImGui::Separator();
+            ImGui::MenuItem("Playback Bar", nullptr, &showPlaybackBar);
             ImGui::EndMenu();
         }
 
@@ -644,10 +685,15 @@ void App::renderUI()
         ImGui::End();
     }
 
-    // =========================
+        // =========================
     // SAVED SHADERS
     // =========================
     renderSavedShadersWindow();
+
+    // =========================
+    // PLAYBACK BAR
+    // =========================
+    renderPlaybackBar();
 
     // =========================
     // FIXED SHADER EDITOR WINDOWS (IMPORTANT PATCH)
@@ -758,8 +804,8 @@ void App::renderUI()
             compileComputeShader();
         }
 
-        ImGui::SliderFloat("Simulation speed", &simulationSpeed, 1.0f, 10000.0f, "%.0f");
         ImGui::Text("Compute dt = %.6f", computeDt);
+        ImGui::TextDisabled("(Speed controlled by Playback Bar)");
 
         ImGui::End();
     }
@@ -1930,6 +1976,172 @@ void App::renderSavedShadersWindow()
         ImGui::Separator();
         ImGui::TextWrapped("%s", hintMessage.c_str());
     }
+
+    ImGui::End();
+}
+
+void App::renderPlaybackBar()
+{
+    if (!showPlaybackBar) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Anchor to bottom of screen
+    float barHeight   = 90.0f;
+    float barWidth    = io.DisplaySize.x;
+    ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - barHeight), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(barWidth, barHeight), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.82f);
+
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration     |
+        ImGuiWindowFlags_NoMove           |
+        ImGuiWindowFlags_NoSavedSettings  |
+        ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    if (!ImGui::Begin("##PlaybackBar", nullptr, flags))
+    {
+        ImGui::End();
+        return;
+    }
+
+    // ── Row 1: Progress bar ──────────────────────────────────────────
+    float progress    = (animationDuration > 0.0f)
+                        ? std::clamp(simulationTime / animationDuration, 0.0f, 1.0f)
+                        : 0.0f;
+    float elapsed     = simulationTime;
+    float remaining   = animationDuration - elapsed;
+
+    // Time labels  [mm:ss.t] left and right of bar
+    auto fmtTime = [](float t) -> std::string {
+        t = std::max(t, 0.0f);
+        int   m  = (int)(t / 60.0f);
+        float s  = fmodf(t, 60.0f);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%02d:%05.2f", m, s);
+        return buf;
+    };
+
+    std::string elapsedStr   = fmtTime(elapsed);
+    std::string remainingStr = "-" + fmtTime(remaining);
+
+    float labelW  = ImGui::CalcTextSize("00:00.00").x + 6.0f;
+    float remLblW = ImGui::CalcTextSize("-00:00.00").x + 6.0f;
+    float barW    = barWidth - labelW - remLblW - 32.0f;
+
+    // Elapsed label
+    ImGui::SetCursorPosX(8.0f);
+    ImGui::TextUnformatted(elapsedStr.c_str());
+    ImGui::SameLine();
+
+    // --- Clickable / draggable progress bar ---
+    ImVec2 barMin = ImVec2(ImGui::GetCursorScreenPos().x, ImGui::GetCursorScreenPos().y + 2.0f);
+    ImVec2 barMax = ImVec2(barMin.x + barW, barMin.y + 16.0f);
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    // Track background
+    drawList->AddRectFilled(barMin, barMax, IM_COL32(60, 60, 60, 255), 6.0f);
+    // Filled portion
+    float fillX = barMin.x + barW * progress;
+    drawList->AddRectFilled(barMin, ImVec2(fillX, barMax.y), IM_COL32(80, 180, 255, 255), 6.0f);
+    // Thumb
+    drawList->AddCircleFilled(ImVec2(fillX, (barMin.y + barMax.y) * 0.5f), 8.0f, IM_COL32(255, 255, 255, 230));
+
+    // Invisible button to capture clicks & drags
+    ImGui::SetCursorScreenPos(ImVec2(barMin.x, barMin.y - 4.0f));
+    ImGui::InvisibleButton("##progressbar", ImVec2(barW, 24.0f));
+
+    if (ImGui::IsItemActive())   // click or drag
+    {
+        float mouseX    = io.MousePos.x;
+        float t         = (mouseX - barMin.x) / barW;
+        t               = std::clamp(t, 0.0f, 1.0f);
+        simulationTime  = t * animationDuration;
+    }
+
+    // Remaining label
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(barMin.x + barW + 8.0f);
+    ImGui::TextUnformatted(remainingStr.c_str());
+
+    // ── Row 2: Transport buttons ─────────────────────────────────────
+    ImGui::Spacing();
+
+    float btnW = 38.0f;
+    float totalBtns = btnW * 6 + ImGui::GetStyle().ItemSpacing.x * 5;
+    ImGui::SetCursorPosX((barWidth - totalBtns) * 0.5f);
+
+    // ⏮  Rewind to start
+    if (ImGui::Button("⏮##rew", ImVec2(btnW, 0)))
+    {
+        simulationTime = 0.0f;
+        isPlaying      = false;
+    }
+    ImGui::SetItemTooltip("Rewind to start");
+    ImGui::SameLine();
+
+    // ⏪  Hold to rewind
+    isFastForwarding = false;
+    isRewinding      = false;
+
+    ImGui::PushButtonRepeat(false);
+    bool rwHeld = ImGui::Button("⏪##rw", ImVec2(btnW, 0));
+    ImGui::SetItemTooltip("Hold: rewind  |  Click: step -1s");
+    if (ImGui::IsItemActive() && ImGui::IsMouseDown(0))
+        isRewinding = true;
+    else if (rwHeld && !ImGui::IsItemActive())
+        simulationTime = std::max(simulationTime - 1.0f, 0.0f);
+    ImGui::SameLine();
+
+    // ⏯  Play / Pause
+    const char* playLabel = isPlaying ? "⏸##pp" : "▶##pp";
+    if (ImGui::Button(playLabel, ImVec2(btnW, 0)))
+        isPlaying = !isPlaying;
+    ImGui::SetItemTooltip(isPlaying ? "Pause" : "Play");
+    ImGui::SameLine();
+
+    // ⏩  Hold to fast-forward
+    bool ffHeld = ImGui::Button("⏩##ff", ImVec2(btnW, 0));
+    ImGui::SetItemTooltip("Hold: fast-forward  |  Click: step +1s");
+    if (ImGui::IsItemActive() && ImGui::IsMouseDown(0))
+        isFastForwarding = true;
+    else if (ffHeld && !ImGui::IsItemActive())
+        simulationTime = std::min(simulationTime + 1.0f, animationDuration);
+    ImGui::SameLine();
+
+    // ⏭  Jump to end
+    if (ImGui::Button("⏭##end", ImVec2(btnW, 0)))
+    {
+        simulationTime = animationDuration;
+        isPlaying      = false;
+    }
+    ImGui::SetItemTooltip("Jump to end");
+    ImGui::SameLine();
+
+    // 🔁  Loop toggle
+    ImGui::PushStyleColor(ImGuiCol_Button,
+        loopAnimation ? IM_COL32(40, 130, 200, 200) : IM_COL32(60, 60, 60, 200));
+    if (ImGui::Button("🔁##loop", ImVec2(btnW, 0)))
+        loopAnimation = !loopAnimation;
+    ImGui::PopStyleColor();
+    ImGui::SetItemTooltip(loopAnimation ? "Loop ON  (click to disable)" : "Loop OFF (click to enable)");
+
+    // ── Row 2 extras: speed & duration ──────────────────────────────
+    ImGui::SameLine(0.0f, 24.0f);
+    ImGui::SetNextItemWidth(120.0f);
+    ImGui::SliderFloat("##speed", &simulationSpeed, 0.1f, 20.0f, "Speed %.1fx");
+    ImGui::SetItemTooltip("Playback speed multiplier");
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.0f);
+    ImGui::SliderFloat("##dur", &animationDuration, 5.0f, 3600.0f, "%.0fs");
+    ImGui::SetItemTooltip("Total animation duration (seconds)");
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80.0f);
+    ImGui::SliderFloat("##ffrate", &fastForwardRate, 2.0f, 32.0f, "FF %.0fx");
+    ImGui::SetItemTooltip("Fast-forward / rewind multiplier");
 
     ImGui::End();
 }
