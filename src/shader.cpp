@@ -100,6 +100,7 @@ bool Shader::compileCompute(const std::string& source, std::string& errorOut)
         glDeleteProgram(programID);
         programID = 0;
     }
+    uniformCache.clear();
 
     // ============================
     // CREATE SHADER

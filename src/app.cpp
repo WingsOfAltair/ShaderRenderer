@@ -1771,7 +1771,6 @@ void App::renderSavedShadersWindow()
                 useComputeShader = loaded.useComputeShader;
                 useParticleMode = loaded.useParticleMode;
                 compileShader(true);
-                compileComputeShader();
                 hintMessage = "Loaded preset '" + selectedPreset + "'.";
             } else {
                 hintMessage = error;
