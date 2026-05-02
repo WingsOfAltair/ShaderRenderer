@@ -182,7 +182,7 @@ App::App()
       isPlaying(true), animationDuration(60.0f), loopAnimation(true), fastForwardRate(5.0f),
       isFastForwarding(false), isRewinding(false), showPlaybackBar(true),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
-      showPlaybackControls(true),
+      
       hintTimer(0.0f), showHint(false),
       showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
       VAO(0), VBO(0), selectedPreset(""), newPresetName(""), errorTexture(0)
@@ -802,8 +802,9 @@ void App::renderUI()
             compileComputeShader();
         }
 
+        ImGui::SliderFloat("Simulation speed", &simulationSpeed, 0.1f, 10000.0f, "%.2fx", ImGuiSliderFlags_Logarithmic);
+        ImGui::SetItemTooltip("Simulation speed multiplier (shared with Playback Bar)");
         ImGui::Text("Compute dt = %.6f", computeDt);
-        ImGui::TextDisabled("(Speed controlled by Playback Bar)");
 
         ImGui::End();
     }
@@ -2127,9 +2128,9 @@ void App::renderPlaybackBar()
 
     // ── Row 2 extras: speed & duration ──────────────────────────────
     ImGui::SameLine(0.0f, 24.0f);
-    ImGui::SetNextItemWidth(120.0f);
-    ImGui::SliderFloat("##speed", &simulationSpeed, 0.1f, 20.0f, "Speed %.1fx");
-    ImGui::SetItemTooltip("Playback speed multiplier");
+    ImGui::SetNextItemWidth(130.0f);
+    ImGui::SliderFloat("##speed", &simulationSpeed, 0.1f, 10000.0f, "Speed %.2fx", ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltip("Simulation speed (logarithmic). Ctrl+Click to type a value. Shared with Compute panel.");
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100.0f);

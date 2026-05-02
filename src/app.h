@@ -146,7 +146,6 @@ private:
     bool showVertexEditor;
     bool showFragmentEditor;
     bool showComputeEditor;
-    bool showPlaybackControls;
     float hintTimer;
     bool showHint;
     std::string hintMessage;
