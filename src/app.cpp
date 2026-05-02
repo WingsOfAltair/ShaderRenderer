@@ -1014,6 +1014,46 @@ ComputeShaderSources App::splitComputeShaderSources(const std::string& source) c
     return splitCombinedShaderSources(source).computeSources;
 }
 
+static int parseLocalSize(const std::string& source, const std::string& key, int defaultValue)
+{
+    std::string lowerSource = toLowerCopy(source);
+    std::string token = "local_size_" + key;
+    size_t pos = lowerSource.find(token);
+    if (pos == std::string::npos)
+        return defaultValue;
+
+    pos = lowerSource.find('=', pos);
+    if (pos == std::string::npos)
+        return defaultValue;
+
+    ++pos;
+    while (pos < lowerSource.size() && std::isspace(static_cast<unsigned char>(lowerSource[pos])))
+        ++pos;
+
+    int value = 0;
+    while (pos < lowerSource.size() && std::isdigit(static_cast<unsigned char>(lowerSource[pos]))) {
+        value = value * 10 + (lowerSource[pos] - '0');
+        ++pos;
+    }
+
+    return value > 0 ? value : defaultValue;
+}
+
+int App::getComputeShaderLocalInvocationCount(const std::string& source) const
+{
+    int x = parseLocalSize(source, "x", 128);
+    int y = parseLocalSize(source, "y", 1);
+    int z = parseLocalSize(source, "z", 1);
+    return std::max<int>(1, x) * std::max<int>(1, y) * std::max<int>(1, z);
+}
+
+bool App::computeSourceUsesWriteBinding1(const std::string& source) const
+{
+    std::string lowerSource = toLowerCopy(source);
+    return lowerSource.find("binding = 1") != std::string::npos ||
+           lowerSource.find("binding=1") != std::string::npos;
+}
+
 bool App::computeSourceUsesForce(const std::string& source) const
 {
     std::string lowerSource = toLowerCopy(source);
@@ -1052,6 +1092,12 @@ bool App::compileComputeShader(bool showPopup)
             if (useParticleMode)
                 resetParticleState();
         }
+    }
+
+    bool computeNeedsPingPong = computeSourceUsesWriteBinding1(sources.initSource + sources.updateSource) || !sources.initSource.empty();
+    if (!computeNeedsPingPong && particleCount > 0)
+    {
+        particleWriteBuffer = particleReadBuffer;
     }
 
     if (!combined.vertexSource.empty() && !combined.fragmentSource.empty())
@@ -1764,6 +1810,9 @@ void App::renderScene()
             {
                 if (useDualComputeShader && needInitDispatch)
                 {
+                    int initInvocationCount = getComputeShaderLocalInvocationCount(splitCombinedShaderSources(computeCode).computeSources.initSource);
+                    int initDispatchCount = (particleCount + initInvocationCount - 1) / initInvocationCount;
+
                     initComputeShader.use();
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleWriteBuffer);
@@ -1772,13 +1821,16 @@ void App::renderScene()
                     initComputeShader.setFloat("gravityIntensity", 1.0f);
                     initComputeShader.setFloat("k", 0.1f);
                     initComputeShader.setInt("increaseK", 0);
-                    glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
+                    glDispatchCompute((GLuint)initDispatchCount, 1, 1);
                     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
                     std::swap(particleReadBuffer, particleWriteBuffer);
                     needInitDispatch = false;
                 }
 
                 {
+                    int updateInvocationCount = getComputeShaderLocalInvocationCount(splitCombinedShaderSources(computeCode).computeSources.updateSource);
+                    int updateDispatchCount = (particleCount + updateInvocationCount - 1) / updateInvocationCount;
+
                     computeShader.use();
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
                     GLuint writeBuffer = particleWriteBuffer ? particleWriteBuffer : particleReadBuffer;
@@ -1788,7 +1840,7 @@ void App::renderScene()
                     computeShader.setFloat("gravityIntensity", 1.0f);
                     computeShader.setFloat("k", 0.1f);
                     computeShader.setInt("increaseK", 0);
-                    glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
+                    glDispatchCompute((GLuint)updateDispatchCount, 1, 1);
                     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
                     if (particleWriteBuffer && particleWriteBuffer != particleReadBuffer)
                         std::swap(particleReadBuffer, particleWriteBuffer);

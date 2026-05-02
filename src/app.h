@@ -48,6 +48,8 @@ private:
     ComputeShaderSources splitComputeShaderSources(const std::string& source) const;
     CombinedShaderSources splitCombinedShaderSources(const std::string& source) const;
     bool computeSourceUsesForce(const std::string& source) const;
+    bool computeSourceUsesWriteBinding1(const std::string& source) const;
+    int getComputeShaderLocalInvocationCount(const std::string& source) const;
     void createParticleBuffers(int count);
     void resetParticleState();
     void destroyParticleBuffers();
