@@ -260,6 +260,12 @@ bool App::init(int width, int height, const char* title)
     }
     glfwMakeContextCurrent(window);
 
+    glfwSetWindowCloseCallback(window, [](GLFWwindow* w)
+    {
+        auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
+        app->requestShutdown();
+    });
+
     if (!gladLoadGL(glfwGetProcAddress)) {
         std::cerr << "Failed to initialize OpenGL loader" << std::endl;
         glfwDestroyWindow(window);
@@ -341,11 +347,25 @@ bool App::init(int width, int height, const char* title)
     return true;
 }
 
+void App::requestShutdown()
+{
+    if (shuttingDown)
+        return;
+
+    shuttingDown = true;
+
+    if (window)
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+}
+
 void App::run()
 {
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
+
+        if (shuttingDown)
+            break;
 
         // -------------------------
         // Input
@@ -376,28 +396,35 @@ void App::run()
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
-
-        // 🔥 FORCE EXIT CHECK (important fix)
-        if (window && glfwWindowShouldClose(window))
-        {
-            break;
-        }
     }
-
-    // 🔥 EXTRA SAFETY: ensure exit flag is respected immediately
-    if (window)
-    {
-        glfwSetWindowShouldClose(window, GLFW_TRUE);
-    }
+    shutdown();
 }
 
 void App::shutdown()
 {
-    // Stop GPU submission first
-    glFlush();
+    if (shuttingDown)
+        return;
 
-    if (glIsVertexArray(VAO)) glDeleteVertexArrays(1, &VAO);
-    if (glIsBuffer(VBO)) glDeleteBuffers(1, &VBO);
+    shuttingDown = true;
+
+    if (window)
+    {
+        glfwMakeContextCurrent(window);
+
+        glFinish(); // ensure GPU is done
+    }
+
+    if (VAO)
+    {
+        glDeleteVertexArrays(1, &VAO);
+        VAO = 0;
+    }
+
+    if (VBO)
+    {
+        glDeleteBuffers(1, &VBO);
+        VBO = 0;
+    }
 
     destroyComputeTexture();
 
@@ -459,7 +486,7 @@ void App::renderUI()
             ImGui::Separator();
 
             if (ImGui::MenuItem("Exit", "Alt+F4"))
-                glfwSetWindowShouldClose(window, true);
+                requestShutdown();
 
             ImGui::EndMenu();
         }
@@ -629,7 +656,7 @@ void App::renderUI()
         ImGui::Checkbox("Enable compute", &useComputeShader);
 
         if (useComputeShader != prevUse)
-{
+        {
             if (useComputeShader)
             {
                 createComputeTexture(windowWidth, windowHeight);   // ✅ ADD THIS

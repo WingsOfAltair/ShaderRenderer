@@ -34,5 +34,5 @@ int main()
 
     std::cout << "Application exited cleanly." << std::endl;
 
-    return 0; // ✅ proper termination
+    return 0;
 }

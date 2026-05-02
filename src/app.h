@@ -46,6 +46,7 @@ private:
     void createFBO(GLuint& fbo, GLuint& tex);
     void destroyFBO(GLuint& fbo, GLuint& tex);
     static std::filesystem::path getExecutableDirectory();
+    void requestShutdown();
 
     // GLFW
     GLFWwindow* window;
@@ -118,6 +119,8 @@ private:
 
     GLuint shaderFBO = 0;
     GLuint shaderTex = 0;
+
+    bool shuttingDown = false;
 };
 
 
