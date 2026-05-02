@@ -143,7 +143,7 @@ App::App()
       shaderValid(false), computeValid(false), initComputeValid(false), useComputeShader(false), useParticleMode(false),
       useDualComputeShader(false), needInitDispatch(false), particleHasForce(true),
       computeTexture(0), particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
-      time(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(100.0f), computeDt(0.016f),
+      time(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       hintTimer(0.0f), showHint(false),
       showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
