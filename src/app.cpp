@@ -444,11 +444,9 @@ void App::run()
 
                 time += deltaTime;
 
-        // Reset per-frame FF/RW flags — renderUI() sets them if buttons are held
-        isFastForwarding = false;
-        isRewinding      = false;
-
         // --- Advance simulation time according to playback state ---
+        // isFastForwarding / isRewinding are written by renderPlaybackBar() last frame
+        // and reset inside renderPlaybackBar() each frame before button checks.
         if (isPlaying || isFastForwarding || isRewinding)
         {
             float effectiveSpeed = simulationSpeed;
@@ -2081,16 +2079,16 @@ void App::renderPlaybackBar()
     ImGui::SetItemTooltip("Rewind to start");
     ImGui::SameLine();
 
-    // ⏪  Hold to rewind
+        // ⏪  Hold to rewind
+    // Reset flags here — previous frame's values already drove the time advance above
     isFastForwarding = false;
     isRewinding      = false;
 
-    ImGui::PushButtonRepeat(false);
     bool rwHeld = ImGui::Button("⏪##rw", ImVec2(btnW, 0));
     ImGui::SetItemTooltip("Hold: rewind  |  Click: step -1s");
     if (ImGui::IsItemActive() && ImGui::IsMouseDown(0))
         isRewinding = true;
-    else if (rwHeld && !ImGui::IsItemActive())
+    else if (rwHeld && !isRewinding)
         simulationTime = std::max(simulationTime - 1.0f, 0.0f);
     ImGui::SameLine();
 
