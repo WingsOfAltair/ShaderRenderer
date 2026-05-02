@@ -49,6 +49,10 @@ private:
     CombinedShaderSources splitCombinedShaderSources(const std::string& source) const;
     bool computeSourceUsesForce(const std::string& source) const;
     bool computeSourceUsesWriteBinding1(const std::string& source) const;
+    bool computeSourceUsesR8UI(const std::string& source) const;
+    void createPingPongTextures(int width, int height);
+    void destroyPingPongTextures();
+    void seedPingPongTexture(GLuint tex, int width, int height);
     int getComputeShaderLocalInvocationCount(const std::string& source) const;
     void createParticleBuffers(int count);
     void resetParticleState();
@@ -93,6 +97,15 @@ private:
     bool needInitDispatch;
     bool particleHasForce;
     unsigned int computeTexture;
+
+    // Ping-pong r8ui textures for image-based compute shaders (e.g. Game of Life)
+    GLuint pingPongTexA;
+    GLuint pingPongTexB;
+    GLuint pingPongReadTex;
+    GLuint pingPongWriteTex;
+    bool usePingPong;           // true when compute uses r8ui + binding 1 write
+    bool needsPingPongInit;     // true until first frame seeds random cell data
+    float pingPongAccumulator;  // fractional step accumulator for speed control
     GLuint particleVAO;
     GLuint particleBufferA;
     GLuint particleBufferB;

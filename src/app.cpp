@@ -142,7 +142,10 @@ App::App()
     : window(nullptr), windowWidth(1280), windowHeight(720),
       shaderValid(false), computeValid(false), initComputeValid(false), useComputeShader(false), useParticleMode(false),
       useDualComputeShader(false), needInitDispatch(false), particleHasForce(true),
-      computeTexture(0), particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
+      computeTexture(0),
+      pingPongTexA(0), pingPongTexB(0), pingPongReadTex(0), pingPongWriteTex(0),
+      usePingPong(false), needsPingPongInit(true),
+      particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
       time(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       hintTimer(0.0f), showHint(false),
@@ -1062,6 +1065,12 @@ bool App::computeSourceUsesForce(const std::string& source) const
            lowerSource.find("particles_in[gidx].force") != std::string::npos;
 }
 
+bool App::computeSourceUsesR8UI(const std::string& source) const
+{
+    std::string lowerSource = toLowerCopy(source);
+    return lowerSource.find("r8ui") != std::string::npos;
+}
+
 bool App::compileComputeShader(bool showPopup)
 {
     if (!useComputeShader)
@@ -1094,11 +1103,27 @@ bool App::compileComputeShader(bool showPopup)
         }
     }
 
-    bool computeNeedsPingPong = computeSourceUsesWriteBinding1(sources.initSource + sources.updateSource) || !sources.initSource.empty();
+        bool computeNeedsPingPong = computeSourceUsesWriteBinding1(sources.initSource + sources.updateSource) || !sources.initSource.empty();
     if (!computeNeedsPingPong && particleCount > 0)
     {
         particleWriteBuffer = particleReadBuffer;
     }
+
+    // Detect r8ui image ping-pong mode (e.g. Game of Life)
+    bool needsR8UI = computeSourceUsesR8UI(sources.initSource + sources.updateSource);
+    if (needsR8UI != usePingPong)
+    {
+        usePingPong = needsR8UI;
+        // Tear down whichever texture type is no longer needed
+        if (computeTexture) { glDeleteTextures(1, &computeTexture); computeTexture = 0; }
+        destroyPingPongTextures();
+        if (usePingPong)
+            createPingPongTextures(windowWidth, windowHeight);
+        else
+            createComputeTexture(windowWidth, windowHeight);
+    }
+    if (usePingPong)
+        needsPingPongInit = true;
 
     if (!combined.vertexSource.empty() && !combined.fragmentSource.empty())
     {
@@ -1189,7 +1214,12 @@ void App::createComputeTexture(int width, int height)
         computeTexture = 0;
     }
 
-    if (width <= 0 || height <= 0) {
+    if (width <= 0 || height <= 0)
+        return;
+
+    // r8ui ping-pong path — two textures managed separately
+    if (usePingPong) {
+        createPingPongTextures(width, height);
         return;
     }
 
@@ -1209,6 +1239,50 @@ void App::destroyComputeTexture()
         glDeleteTextures(1, &computeTexture);
         computeTexture = 0;
     }
+    destroyPingPongTextures();
+}
+
+void App::destroyPingPongTextures()
+{
+    if (pingPongTexA) { glDeleteTextures(1, &pingPongTexA); pingPongTexA = 0; }
+    if (pingPongTexB) { glDeleteTextures(1, &pingPongTexB); pingPongTexB = 0; }
+    pingPongReadTex = 0;
+    pingPongWriteTex = 0;
+}
+
+void App::createPingPongTextures(int width, int height)
+{
+    destroyPingPongTextures();
+    if (width <= 0 || height <= 0) return;
+
+    auto makeR8UI = [](int w, int h) -> GLuint {
+        GLuint tex;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, w, h, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return tex;
+    };
+
+    pingPongTexA   = makeR8UI(width, height);
+    pingPongTexB   = makeR8UI(width, height);
+    pingPongReadTex  = pingPongTexA;
+    pingPongWriteTex = pingPongTexB;
+}
+
+void App::seedPingPongTexture(GLuint tex, int width, int height)
+{
+    std::vector<unsigned char> data(width * height);
+    for (auto& cell : data)
+        cell = (rand() % 5 == 0) ? 1u : 0u;  // ~20% alive
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height,
+                    GL_RED_INTEGER, GL_UNSIGNED_BYTE, data.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void App::destroyParticleBuffers()
@@ -1888,38 +1962,77 @@ void App::renderScene()
 
     if (renderOk)
     {
-        if (useComputeShader)
+                if (useComputeShader)
         {
-            computeShader.use();
-            glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
-            computeShader.setFloat("uTime", time);
-            computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-            computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
-            computeShader.setFloat("gravityIntensity", 1.0f);
-            computeShader.setFloat("k", 0.1f);
-            computeShader.setInt("increaseK", 0);
-
-            glDispatchCompute(
-                (GLuint)(windowWidth + 15) / 16,
-                (GLuint)(windowHeight + 15) / 16,
-                1
-            );
-
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
-            GLenum err = glGetError();
-            if (err != GL_NO_ERROR)
+            if (usePingPong)
             {
-                std::cerr << "GL ERROR after compute: " << err << std::endl;
-            }
-        }
+                // ---- r8ui ping-pong path (e.g. Game of Life) ----
 
-        if (useComputeShader)
-        {
-            displayShader.use();
-            displayShader.setInt("uTexture", 0);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, computeTexture);
+                // Seed the read texture once on first frame / after recompile
+                if (needsPingPongInit && pingPongReadTex)
+                {
+                    seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
+                    needsPingPongInit = false;
+                }
+
+                // Compute pass
+                CombinedShaderSources combined = splitCombinedShaderSources(computeCode);
+                const std::string& updateSrc = combined.computeSources.updateSource;
+                int lx = parseLocalSize(updateSrc, "x", 8);
+                int ly = parseLocalSize(updateSrc, "y", 8);
+
+                computeShader.use();
+                glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  GL_R8UI);
+                glBindImageTexture(1, pingPongWriteTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8UI);
+                glDispatchCompute(
+                    ((GLuint)windowWidth  + lx - 1) / lx,
+                    ((GLuint)windowHeight + ly - 1) / ly,
+                    1
+                );
+                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                std::swap(pingPongReadTex, pingPongWriteTex);
+
+                GLenum err = glGetError();
+                if (err != GL_NO_ERROR)
+                    std::cerr << "GL ERROR after ping-pong compute: " << err << std::endl;
+
+                // Render pass — user's own fragment shader reads the image directly
+                shader.use();
+                glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
+                shader.setVec2("resolution", (float)windowWidth, (float)windowHeight);
+                shader.setVec2("offset",     0.0f, 0.0f);
+                shader.setFloat("scale",     1.0f);
+                shader.setFloat("uTime",     time);
+            }
+            else
+            {
+                // ---- standard rgba32f compute path ----
+                computeShader.use();
+                glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+                computeShader.setFloat("uTime", time);
+                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
+                computeShader.setFloat("gravityIntensity", 1.0f);
+                computeShader.setFloat("k", 0.1f);
+                computeShader.setInt("increaseK", 0);
+
+                glDispatchCompute(
+                    (GLuint)(windowWidth  + 15) / 16,
+                    (GLuint)(windowHeight + 15) / 16,
+                    1
+                );
+                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+                GLenum err = glGetError();
+                if (err != GL_NO_ERROR)
+                    std::cerr << "GL ERROR after compute: " << err << std::endl;
+
+                // Display the rgba32f texture via the blit shader
+                displayShader.use();
+                displayShader.setInt("uTexture", 0);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, computeTexture);
+            }
         }
         else
         {
