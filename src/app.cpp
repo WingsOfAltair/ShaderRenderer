@@ -140,9 +140,10 @@ void App::destroyFBO(GLuint& fbo, GLuint& tex)
 
 App::App()
     : window(nullptr), windowWidth(1280), windowHeight(720),
-      shaderValid(false), computeValid(false), useComputeShader(false), useParticleMode(false),
-      computeTexture(0), particleVAO(0), particleBuffer(0), particleCount(0),
-      time(0.0f),
+      shaderValid(false), computeValid(false), initComputeValid(false), useComputeShader(false), useParticleMode(false),
+      useDualComputeShader(false), needInitDispatch(false),
+      computeTexture(0), particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
+      time(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(100.0f), computeDt(0.016f),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       hintTimer(0.0f), showHint(false),
       showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
@@ -347,6 +348,9 @@ bool App::init(int width, int height, const char* title)
     createComputeTexture(windowWidth, windowHeight);
     compileComputeShader();
 
+    lastFrameTime = (float)glfwGetTime();
+    computeDt = 0.016f;
+
     return true;
 }
 
@@ -383,7 +387,16 @@ void App::run()
         // -------------------------
         // Update
         // -------------------------
-        time += 0.016f;
+        float currentTime = (float)glfwGetTime();
+        float deltaTime = currentTime - lastFrameTime;
+        lastFrameTime = currentTime;
+        if (deltaTime <= 0.0f)
+            deltaTime = 0.016f;
+        if (deltaTime > 0.1f)
+            deltaTime = 0.1f;
+
+        time += deltaTime;
+        computeDt = deltaTime * simulationSpeed;
 
         // -------------------------
         // UI
@@ -662,7 +675,8 @@ void App::renderUI()
         bool prevParticleMode = useParticleMode;
         ImGui::Checkbox("Particle rendering", &useParticleMode);
         ImGui::TextWrapped("Particle mode uses the current vertex/fragment shader to draw points from the SSBO.\n"
-                         "Vertex shader inputs should match the particle buffer layout at locations 0, 1, and 2.");
+                         "Vertex shader inputs should match the particle buffer layout at locations 0, 1, 2, and 3.");
+        ImGui::TextWrapped("Optional compute shader sections: use 'init #version' for one-time setup and 'update #version' for per-frame updates.");
 
         if (useComputeShader != prevUse)
         {
@@ -699,6 +713,9 @@ void App::renderUI()
             computeCode = defaultComputeShader;
             compileComputeShader();
         }
+
+        ImGui::SliderFloat("Simulation speed", &simulationSpeed, 1.0f, 10000.0f, "%.0f");
+        ImGui::Text("Compute dt = %.6f", computeDt);
 
         ImGui::End();
     }
@@ -737,15 +754,17 @@ void App::compileShader(bool resetParticles)
 
     if (useComputeShader)
     {
-        std::string computeSource = extractFirstShaderStage(computeCode);
-
-        computeOk = computeShader.compileCompute(computeSource, computeCompileError);
+        // Compile the full compute pipeline so init/update blocks are handled correctly.
+        computeOk = compileComputeShader(false);
 
         if (!computeOk)
         {
             popup << "\n--- Compute Shader ---\n";
             popup << "Compute shader compilation failed:\n";
-            popup << computeCompileError << "\n";
+            if (!computeCompileError.empty())
+                popup << computeCompileError << "\n";
+            if (!initComputeCompileError.empty())
+                popup << initComputeCompileError << "\n";
         }
     }
 
@@ -753,7 +772,9 @@ void App::compileShader(bool resetParticles)
     // 3. Update state
     // =========================
     shaderValid = shaderOk;
-    computeValid = computeOk;
+    // compileComputeShader already updates computeValid/initComputeValid
+    if (useComputeShader)
+        computeValid = computeOk;
 
     bool overallOk = shaderOk && (!useComputeShader || computeOk);
 
@@ -850,28 +871,110 @@ std::string App::extractFirstShaderStage(const std::string& source)
     return source.substr(first, second - first);
 }
 
+ComputeShaderSources App::splitComputeShaderSources(const std::string& source) const
+{
+    ComputeShaderSources result;
+
+    auto findLabelVersion = [&](const std::string& label) -> std::pair<size_t, size_t> {
+        std::string lowerSource = source;
+        std::transform(lowerSource.begin(), lowerSource.end(), lowerSource.begin(), [](unsigned char c) { return std::tolower(c); });
+        std::string lowerLabel = label;
+        std::transform(lowerLabel.begin(), lowerLabel.end(), lowerLabel.begin(), [](unsigned char c) { return std::tolower(c); });
+
+        size_t pos = 0;
+        while (pos < lowerSource.size()) {
+            pos = lowerSource.find(lowerLabel, pos);
+            if (pos == std::string::npos)
+                return {std::string::npos, std::string::npos};
+
+            size_t after = pos + lowerLabel.size();
+            while (after < lowerSource.size() && std::isspace(static_cast<unsigned char>(lowerSource[after])))
+                ++after;
+
+            if (after + 8 <= lowerSource.size() && lowerSource.compare(after, 8, "#version") == 0)
+                return {pos, source.find("#version", after)};
+
+            pos = after;
+        }
+
+        return {std::string::npos, std::string::npos};
+    };
+
+    auto [initLabelPos, initVersion] = findLabelVersion("init");
+    auto [updateLabelPos, updateVersion] = findLabelVersion("update");
+
+    if (initVersion != std::string::npos && updateVersion != std::string::npos && initLabelPos < updateLabelPos) {
+        result.initSource = source.substr(initVersion, updateLabelPos - initVersion);
+        size_t nextVersion = source.find("#version", updateVersion + 1);
+        if (nextVersion == std::string::npos) {
+            result.updateSource = source.substr(updateVersion);
+        } else {
+            result.updateSource = source.substr(updateVersion, nextVersion - updateVersion);
+        }
+        return result;
+    }
+
+    // Fallback: if two plain #version blocks are present, treat the first as init and the second as update.
+    size_t firstVersion = source.find("#version");
+    if (firstVersion != std::string::npos) {
+        size_t secondVersion = source.find("#version", firstVersion + 8);
+        if (secondVersion != std::string::npos) {
+            result.initSource = source.substr(firstVersion, secondVersion - firstVersion);
+            size_t thirdVersion = source.find("#version", secondVersion + 8);
+            if (thirdVersion == std::string::npos) {
+                result.updateSource = source.substr(secondVersion);
+            } else {
+                result.updateSource = source.substr(secondVersion, thirdVersion - secondVersion);
+            }
+            return result;
+        }
+    }
+
+    result.updateSource = extractFirstShaderStage(source);
+    return result;
+}
+
 bool App::compileComputeShader(bool showPopup)
 {
     if (!useComputeShader)
     {
         computeValid = false;
+        initComputeValid = false;
         computeCompileError.clear();
+        initComputeCompileError.clear();
         return false;
     }
+
     computeCompileError.clear();
+    initComputeCompileError.clear();
     if (!showPopup) {
         compileErrorPopupMessage.clear();
     }
-    std::string computeSource = extractFirstShaderStage(computeCode);
 
-    if (computeShader.compileCompute(computeSource, computeCompileError)) {
-        computeValid = true;
+    ComputeShaderSources sources = splitComputeShaderSources(computeCode);
 
+    bool initOk = true;
+    if (!sources.initSource.empty())
+    {
+        initOk = initComputeShader.compileCompute(sources.initSource, initComputeCompileError);
+    }
+
+    bool updateOk = computeShader.compileCompute(sources.updateSource, computeCompileError);
+
+    useDualComputeShader = !sources.initSource.empty() && initOk;
+    needInitDispatch = useDualComputeShader;
+    initComputeValid = initOk;
+    computeValid = updateOk && (sources.initSource.empty() || initOk);
+
+    if (computeValid)
+    {
         std::ostringstream msg;
 
         msg << "✓ Compute shader compiled successfully\n\n";
         msg << "Compute pipeline is now active.\n";
         msg << "Dispatch will run at next frame.\n";
+        if (useDualComputeShader)
+            msg << "Init/update compute pipeline enabled.\n";
 
         if (showPopup)
             hintMessage = msg.str();
@@ -880,32 +983,35 @@ bool App::compileComputeShader(bool showPopup)
 
         std::cout << msg.str() << std::endl;
         return true;
-    } else {
-        computeValid = false;
-
-        std::ostringstream msg;
-
-        msg << "Compute shader compilation failed\n\n";
-        msg << "The compute stage could not be executed on the GPU.\n\n";
-
-        msg << "Error log:\n";
-        msg << computeCompileError << "\n\n";
-
-        msg << "Possible causes:\n";
-        msg << " - Invalid image binding (layout/binding mismatch)\n";
-        msg << " - Missing memory barrier usage assumptions\n";
-        msg << " - Wrong work group size or dispatch bounds\n";
-        msg << " - GLSL 430 requirement not met\n";
-
-        if (showPopup) {
-            compileErrorPopupMessage = msg.str();
-            showCompileErrorPopup = true;
-            compileErrorPopupTimer = 0.0f;
-        }
-
-        std::cerr << msg.str() << std::endl;
-        return false;
     }
+
+    std::ostringstream msg;
+    msg << "Compute shader compilation failed\n\n";
+    msg << "The compute stage could not be executed on the GPU.\n\n";
+
+    if (!computeCompileError.empty()) {
+        msg << "----- Update Compute Stage -----\n";
+        msg << computeCompileError << "\n\n";
+    }
+    if (!initComputeCompileError.empty()) {
+        msg << "----- Init Compute Stage -----\n";
+        msg << initComputeCompileError << "\n\n";
+    }
+
+    msg << "Possible causes:\n";
+    msg << " - Invalid buffer binding (layout/binding mismatch)\n";
+    msg << " - Missing memory barrier usage assumptions\n";
+    msg << " - Wrong work group size or dispatch bounds\n";
+    msg << " - GLSL 430 requirement not met\n";
+
+    if (showPopup) {
+        compileErrorPopupMessage = msg.str();
+        showCompileErrorPopup = true;
+        compileErrorPopupTimer = 0.0f;
+    }
+
+    std::cerr << msg.str() << std::endl;
+    return false;
 }
 
 void App::createComputeTexture(int width, int height)
@@ -939,14 +1045,20 @@ void App::destroyComputeTexture()
 
 void App::destroyParticleBuffers()
 {
-    if (particleBuffer) {
-        glDeleteBuffers(1, &particleBuffer);
-        particleBuffer = 0;
+    if (particleBufferA) {
+        glDeleteBuffers(1, &particleBufferA);
+        particleBufferA = 0;
+    }
+    if (particleBufferB) {
+        glDeleteBuffers(1, &particleBufferB);
+        particleBufferB = 0;
     }
     if (particleVAO) {
         glDeleteVertexArrays(1, &particleVAO);
         particleVAO = 0;
     }
+    particleReadBuffer = 0;
+    particleWriteBuffer = 0;
     particleCount = 0;
 }
 
@@ -960,6 +1072,7 @@ void App::createParticleBuffers(int count)
     struct Particle {
         float position[4];
         float velocity[4];
+        float force[4];
         float mass;
         float padding[3];
     };
@@ -977,24 +1090,39 @@ void App::createParticleBuffers(int count)
         particles[i].velocity[1] = 0.0f;
         particles[i].velocity[2] = 0.0f;
         particles[i].velocity[3] = 0.0f;
+        particles[i].force[0] = 0.0f;
+        particles[i].force[1] = 0.0f;
+        particles[i].force[2] = 0.0f;
+        particles[i].force[3] = 0.0f;
         particles[i].mass = 1.0f;
         particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
     }
 
     particleCount = count;
     glGenVertexArrays(1, &particleVAO);
-    glGenBuffers(1, &particleBuffer);
+    glGenBuffers(1, &particleBufferA);
+    glGenBuffers(1, &particleBufferB);
 
     glBindVertexArray(particleVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, particleBuffer);
+
+    glBindBuffer(GL_ARRAY_BUFFER, particleBufferA);
     glBufferData(GL_ARRAY_BUFFER, particleCount * sizeof(Particle), particles.data(), GL_DYNAMIC_DRAW);
 
+    glBindBuffer(GL_ARRAY_BUFFER, particleBufferB);
+    glBufferData(GL_ARRAY_BUFFER, particleCount * sizeof(Particle), particles.data(), GL_DYNAMIC_DRAW);
+
+    particleReadBuffer = particleBufferA;
+    particleWriteBuffer = particleBufferB;
+
+    glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
     glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)0);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 4));
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 8));
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 8));
     glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Particle), (void*)(sizeof(float) * 12));
+    glEnableVertexAttribArray(3);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
@@ -1002,12 +1130,13 @@ void App::createParticleBuffers(int count)
 
 void App::resetParticleState()
 {
-    if (!particleBuffer || particleCount <= 0)
+    if (!particleBufferA || particleCount <= 0)
         return;
 
     struct Particle {
         float position[4];
         float velocity[4];
+        float force[4];
         float mass;
         float padding[3];
     };
@@ -1025,13 +1154,24 @@ void App::resetParticleState()
         particles[i].velocity[1] = 0.0f;
         particles[i].velocity[2] = 0.0f;
         particles[i].velocity[3] = 0.0f;
+        particles[i].force[0] = 0.0f;
+        particles[i].force[1] = 0.0f;
+        particles[i].force[2] = 0.0f;
+        particles[i].force[3] = 0.0f;
         particles[i].mass = 1.0f;
         particles[i].padding[0] = particles[i].padding[1] = particles[i].padding[2] = 0.0f;
     }
 
-    glBindBuffer(GL_ARRAY_BUFFER, particleBuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, particleBufferA);
     glBufferSubData(GL_ARRAY_BUFFER, 0, particleCount * sizeof(Particle), particles.data());
+    if (particleBufferB) {
+        glBindBuffer(GL_ARRAY_BUFFER, particleBufferB);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, particleCount * sizeof(Particle), particles.data());
+    }
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    particleReadBuffer = particleBufferA;
+    particleWriteBuffer = particleBufferB ? particleBufferB : particleBufferA;
 }
 
 std::filesystem::path App::getExecutableDirectory()
@@ -1410,17 +1550,36 @@ void App::renderScene()
         {
             if (useComputeShader)
             {
-                computeShader.use();
-                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleBuffer);
-                computeShader.setFloat("uTime", time);
-                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
-                computeShader.setFloat("gravityIntensity", 1.0f);
-                computeShader.setFloat("k", 1.0f);
-                computeShader.setInt("increaseK", 0);
-                computeShader.setFloat("dt", 0.016f);
-                glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
-                glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+                if (useDualComputeShader && needInitDispatch)
+                {
+                    initComputeShader.use();
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleWriteBuffer);
+                    initComputeShader.setFloat("dt", computeDt);
+                    glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
+                    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+                    std::swap(particleReadBuffer, particleWriteBuffer);
+                    needInitDispatch = false;
+                }
+
+                if (useDualComputeShader)
+                {
+                    computeShader.use();
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleWriteBuffer);
+                    computeShader.setFloat("dt", computeDt);
+                    glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
+                    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+                    std::swap(particleReadBuffer, particleWriteBuffer);
+                }
+                else
+                {
+                    computeShader.use();
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
+                    computeShader.setFloat("dt", computeDt);
+                    glDispatchCompute((GLuint)(particleCount + 127) / 128, 1, 1);
+                    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+                }
 
                 GLenum err = glGetError();
                 if (err != GL_NO_ERROR)
@@ -1437,6 +1596,13 @@ void App::renderScene()
             shader.setVec2("uMouse", 0.0f, 0.0f);
 
             glBindVertexArray(particleVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
+            const GLsizei stride = sizeof(float) * 16;
+            glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (void*)0);
+            glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 4));
+            glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 8));
+            glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 12));
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
             glDrawArrays(GL_POINTS, 0, particleCount);
             glBindVertexArray(0);
             return;

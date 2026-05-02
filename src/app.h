@@ -17,6 +17,11 @@ struct ShaderPreset {
     bool useParticleMode = false;
 };
 
+struct ComputeShaderSources {
+    std::string initSource;
+    std::string updateSource;
+};
+
 class App {
 public:
     App();
@@ -34,6 +39,7 @@ private:
     void updateBuffers();
     void createComputeTexture(int width, int height);
     void destroyComputeTexture();
+    ComputeShaderSources splitComputeShaderSources(const std::string& source) const;
     void createParticleBuffers(int count);
     void resetParticleState();
     void destroyParticleBuffers();
@@ -60,24 +66,34 @@ private:
     // Shader
     Shader shader;
     Shader computeShader;
+    Shader initComputeShader;
     Shader displayShader;
     std::string vertexCode;
     std::string fragmentCode;
     std::string computeCode;
     std::string compileError;
     std::string computeCompileError;
+    std::string initComputeCompileError;
     bool shaderValid;
     bool computeValid;
+    bool initComputeValid;
     bool useComputeShader;
     bool useParticleMode;
+    bool useDualComputeShader;
+    bool needInitDispatch;
     unsigned int computeTexture;
     GLuint particleVAO;
-    GLuint particleBuffer;
+    GLuint particleBufferA;
+    GLuint particleBufferB;
+    GLuint particleReadBuffer;
+    GLuint particleWriteBuffer;
     int particleCount;
     float time;
     float lastFrameTime;
     int frameCount;
     float fps;
+    float simulationSpeed;
+    float computeDt;
 
     // Editor
     ShaderEditor vertexEditor;
