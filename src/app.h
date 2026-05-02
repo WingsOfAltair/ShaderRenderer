@@ -71,7 +71,6 @@ private:
     void destroyFBO(GLuint& fbo, GLuint& tex);
     static std::filesystem::path getExecutableDirectory();
     void requestShutdown();
-    void App::applyResize(int ww, int hh);
 
     // GLFW
     GLFWwindow* window;
@@ -171,13 +170,6 @@ private:
     GLuint shaderTex = 0;
 
     bool shuttingDown = false;
-
-    float computeFPS = 60.0f;
-    float computeAccumulator = 0.0f;
-
-    bool pendingResize = false;
-    int pendingWidth = 0;
-    int pendingHeight = 0;
 };
 
 

@@ -11,15 +11,13 @@
 #include <iostream>
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 #include <cctype>
 #ifdef _WIN32
-#define NOMINMAX
 #include <windows.h>
 #endif
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
-#define NOMINMAX
-#include <algorithm>
 
 // Default vertex shader
 const char* App::defaultVertexShader = R"(
@@ -152,7 +150,7 @@ App::App()
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       hintTimer(0.0f), showHint(false),
       showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
-      VAO(0), VBO(0), selectedPreset(""), newPresetName(""), errorTexture(0), computeFPS(60.0f), computeAccumulator(0.0f)
+      VAO(0), VBO(0), selectedPreset(""), newPresetName(""), errorTexture(0)
 {
 }
 
@@ -284,9 +282,19 @@ bool App::init(int width, int height, const char* title)
     {
         auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
 
-        app->pendingResize = true;
-        app->pendingWidth = ww;
-        app->pendingHeight = hh;
+        app->windowWidth = ww;
+        app->windowHeight = hh;
+
+        glViewport(0, 0, ww, hh);
+
+        app->destroyFBO(app->backgroundFBO, app->backgroundTex);
+        app->destroyFBO(app->shaderFBO, app->shaderTex);
+
+        app->createFBO(app->backgroundFBO, app->backgroundTex);
+        app->createFBO(app->shaderFBO, app->shaderTex);
+
+        app->destroyComputeTexture();
+        app->createComputeTexture(ww, hh);
     });
 
     glfwSetWindowUserPointer(window, this);
@@ -402,13 +410,6 @@ void App::run()
         ImGui::NewFrame();
 
         renderUI();
-        
-        if (pendingResize)
-        {
-            applyResize(pendingWidth, pendingHeight);
-            pendingResize = false;
-        }
-        
         renderScene();
 
         ImGui::Render();
@@ -719,7 +720,6 @@ void App::renderUI()
 
         ImGui::SliderFloat("Simulation speed", &simulationSpeed, 1.0f, 10000.0f, "%.0f");
         ImGui::Text("Compute dt = %.6f", computeDt);
-        ImGui::SliderFloat("Dispatch FPS", &computeFPS, 1.0f, 240.0f, "%.0f");
 
         ImGui::End();
     }
@@ -909,38 +909,6 @@ static std::string trimWhitespace(const std::string& s)
     while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])))
         --end;
     return s.substr(start, end - start);
-}
-
-void App::applyResize(int ww, int hh)
-{
-    if (ww <= 0 || hh <= 0)
-        return;
-
-    windowWidth = ww;
-    windowHeight = hh;
-
-    glViewport(0, 0, ww, hh);
-
-    // --- FBOs ---
-    destroyFBO(backgroundFBO, backgroundTex);
-    destroyFBO(shaderFBO, shaderTex);
-
-    createFBO(backgroundFBO, backgroundTex);
-    createFBO(shaderFBO, shaderTex);
-
-    // --- Compute textures ---
-    destroyComputeTexture();
-    createComputeTexture(ww, hh);
-
-    // --- Ping pong ---
-    if (usePingPong)
-    {
-        createPingPongTextures(ww, hh);
-        needsPingPongInit = true;
-    }
-
-    // --- reset compute timing ---
-    computeAccumulator = 0.0f;
 }
 
 CombinedShaderSources App::splitCombinedShaderSources(const std::string& source) const
@@ -1897,9 +1865,6 @@ void App::renderSavedShadersWindow()
 
 void App::renderScene()
 {
-    if (windowWidth <= 0 || windowHeight <= 0)
-        return;
-
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, windowWidth, windowHeight);
 
@@ -1907,16 +1872,6 @@ void App::renderScene()
     glClear(GL_COLOR_BUFFER_BIT);
 
     bool renderOk = shaderValid;
-
-    if (pingPongReadTex == 0 || pingPongWriteTex == 0)
-        return;
-
-    if (needsPingPongInit)
-    {
-        seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
-        needsPingPongInit = false;
-    }
-
     if (useComputeShader)
     {
         renderOk = renderOk && computeValid;
@@ -1926,122 +1881,87 @@ void App::renderScene()
     {
         if (renderOk && particleCount > 0 && particleVAO != 0)
         {
-            // FPS-controlled step
-            float computeStep = 1.0f / std::max(1.0f, static_cast<float>(computeFPS));
-
-            computeAccumulator += computeDt;
-
-            if (computeAccumulator >= computeStep)
+            if (useComputeShader)
             {
-                computeAccumulator -= computeStep;
-
-                if (useComputeShader)
+                if (useDualComputeShader && needInitDispatch)
                 {
-                    if (useDualComputeShader && needInitDispatch)
-                    {
-                        int initInvocationCount =
-                            getComputeShaderLocalInvocationCount(
-                                splitCombinedShaderSources(computeCode).computeSources.initSource);
+                    int initInvocationCount = getComputeShaderLocalInvocationCount(splitCombinedShaderSources(computeCode).computeSources.initSource);
+                    int initDispatchCount = (particleCount + initInvocationCount - 1) / initInvocationCount;
 
-                        if (initInvocationCount <= 0)
-                        {
-                            std::cerr << "Invalid init local size (0). Skipping init dispatch.\n";
-                        }
-                        else
-                        {
-                            int initDispatchCount =
-                                (particleCount + initInvocationCount - 1) / initInvocationCount;
-
-                            initComputeShader.use();
-                            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
-                            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleWriteBuffer);
-
-                            initComputeShader.setFloat("uTime", simulationTime);
-                            initComputeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                            initComputeShader.setFloat("dt", computeDt);
-                            initComputeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
-                            initComputeShader.setFloat("gravityIntensity", 1.0f);
-                            initComputeShader.setFloat("k", 0.1f);
-                            initComputeShader.setInt("increaseK", 0);
-
-                            glDispatchCompute((GLuint)initDispatchCount, 1, 1);
-                            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
-
-                            std::swap(particleReadBuffer, particleWriteBuffer);
-                            needInitDispatch = false;
-                        }
-                    }
-
-                    {
-                        int updateInvocationCount =
-                            getComputeShaderLocalInvocationCount(
-                                splitCombinedShaderSources(computeCode).computeSources.updateSource);
-
-                        if (updateInvocationCount <= 0)
-                            updateInvocationCount = 1; // 🔥 CRASH FIX
-
-                        int updateDispatchCount =
-                            (particleCount + updateInvocationCount - 1) / updateInvocationCount;
-
-                        computeShader.use();
-                        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
-
-                        GLuint writeBuffer = particleWriteBuffer ? particleWriteBuffer : particleReadBuffer;
-                        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, writeBuffer);
-
-                        computeShader.setFloat("uTime", simulationTime);
-                        computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                        computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
-                        computeShader.setFloat("gravityIntensity", 1.0f);
-                        computeShader.setFloat("k", 0.1f);
-                        computeShader.setInt("increaseK", 0);
-                        computeShader.setFloat("dt", computeDt);
-
-                        glDispatchCompute((GLuint)updateDispatchCount, 1, 1);
-                        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
-
-                        if (particleWriteBuffer && particleWriteBuffer != particleReadBuffer)
-                            std::swap(particleReadBuffer, particleWriteBuffer);
-                    }
-
-                    GLenum err = glGetError();
-                    if (err != GL_NO_ERROR)
-                        std::cerr << "GL ERROR after compute: " << err << std::endl;
+                    initComputeShader.use();
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleWriteBuffer);
+                    initComputeShader.setFloat("uTime", simulationTime);
+                    initComputeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                    initComputeShader.setFloat("dt", computeDt);
+                    initComputeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
+                    initComputeShader.setFloat("gravityIntensity", 1.0f);
+                    initComputeShader.setFloat("k", 0.1f);
+                    initComputeShader.setInt("increaseK", 0);
+                    glDispatchCompute((GLuint)initDispatchCount, 1, 1);
+                    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+                    std::swap(particleReadBuffer, particleWriteBuffer);
+                    needInitDispatch = false;
                 }
 
-                shader.use();
-                shader.setMat4("viewProjection", glm::mat4(1.0f));
-                shader.setVec3("baseColor", 1.0f, 1.0f, 1.0f);
-                shader.setFloat("uTime", simulationTime);
-                shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                shader.setVec2("uMouse", 0.0f, 0.0f);
-                shader.setFloat("dt", computeDt);
-
-                glBindVertexArray(particleVAO);
-                glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
-
-                if (particleHasForce)
                 {
-                    const GLsizei stride = sizeof(float) * 16;
-                    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (void*)0);
-                    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 4));
-                    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 8));
-                    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 12));
-                }
-                else
-                {
-                    const GLsizei stride = sizeof(float) * 12;
-                    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (void*)0);
-                    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 4));
-                    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 8));
-                    glDisableVertexAttribArray(3);
+                    int updateInvocationCount = getComputeShaderLocalInvocationCount(splitCombinedShaderSources(computeCode).computeSources.updateSource);
+                    int updateDispatchCount = (particleCount + updateInvocationCount - 1) / updateInvocationCount;
+
+                    computeShader.use();
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
+                    GLuint writeBuffer = particleWriteBuffer ? particleWriteBuffer : particleReadBuffer;
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, writeBuffer);
+                    computeShader.setFloat("uTime", simulationTime);
+                    computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                    computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
+                    computeShader.setFloat("gravityIntensity", 1.0f);
+                    computeShader.setFloat("k", 0.1f);
+                    computeShader.setInt("increaseK", 0);
+                    computeShader.setFloat("dt", computeDt);
+                    glDispatchCompute((GLuint)updateDispatchCount, 1, 1);
+                    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+                    if (particleWriteBuffer && particleWriteBuffer != particleReadBuffer)
+                        std::swap(particleReadBuffer, particleWriteBuffer);
                 }
 
-                glBindBuffer(GL_ARRAY_BUFFER, 0);
-                glDrawArrays(GL_POINTS, 0, particleCount);
-                glBindVertexArray(0);
-                return;
+                GLenum err = glGetError();
+                if (err != GL_NO_ERROR)
+                {
+                    std::cerr << "GL ERROR after compute: " << err << std::endl;
+                }
             }
+
+            shader.use();
+            shader.setMat4("viewProjection", glm::mat4(1.0f));
+            shader.setVec3("baseColor", 1.0f, 1.0f, 1.0f);
+            shader.setFloat("uTime", simulationTime);
+            shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+            shader.setVec2("uMouse", 0.0f, 0.0f);
+            shader.setFloat("dt", computeDt);
+
+            glBindVertexArray(particleVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
+            if (particleHasForce)
+            {
+                const GLsizei stride = sizeof(float) * 16;
+                glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (void*)0);
+                glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 4));
+                glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 8));
+                glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 12));
+            }
+            else
+            {
+                const GLsizei stride = sizeof(float) * 12;
+                glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, stride, (void*)0);
+                glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 4));
+                glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, (void*)(sizeof(float) * 8));
+                glDisableVertexAttribArray(3);
+            }
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glDrawArrays(GL_POINTS, 0, particleCount);
+            glBindVertexArray(0);
+            return;
         }
     }
 
