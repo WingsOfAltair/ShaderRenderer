@@ -1,5 +1,5 @@
 #include "editor.h"
-#include <../imgui/imgui.h>
+#include <imgui.h>
 #include <fstream>
 #include <sstream>
 #include <algorithm>

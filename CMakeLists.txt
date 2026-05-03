@@ -5,6 +5,57 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # =========================
+# FetchContent
+# =========================
+include(FetchContent)
+
+# --- GLFW ---
+FetchContent_Declare(
+    glfw
+    GIT_REPOSITORY https://github.com/glfw/glfw.git
+    GIT_TAG        3.4
+)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(glfw)
+
+# --- GLM ---
+FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG        1.0.1
+)
+FetchContent_MakeAvailable(glm)
+
+# --- STB (NO VERSION TAG — FIXED) ---
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+)
+FetchContent_MakeAvailable(stb)
+
+# --- ImGui ---
+FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        v1.91.9
+)
+FetchContent_MakeAvailable(imgui)
+
+# --- GLAD 2 ---
+FetchContent_Declare(
+    glad
+    GIT_REPOSITORY https://github.com/Dav1dde/glad.git
+    GIT_TAG        v2.0.8
+    SOURCE_SUBDIR  cmake
+)
+set(GLAD_PROFILE "core" CACHE STRING "" FORCE)
+FetchContent_MakeAvailable(glad)
+
+glad_add_library(glad_gl REPRODUCIBLE API gl:core=4.6)
+
+# =========================
 # OpenGL
 # =========================
 find_package(OpenGL REQUIRED)
@@ -13,13 +64,13 @@ find_package(OpenGL REQUIRED)
 # ImGui sources
 # =========================
 set(IMGUI_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/imgui/imgui.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/imgui/imgui_demo.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/imgui/imgui_draw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/imgui/imgui_tables.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/imgui/imgui_widgets.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/backends/imgui_impl_glfw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/backends/imgui_impl_opengl3.cpp
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 
 # =========================
@@ -31,61 +82,64 @@ add_executable(ShaderRenderer
     src/editor.cpp
     src/shader.cpp
     ${IMGUI_SOURCES}
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glad/src/gl.c
 )
 
+# =========================
+# Includes
+# =========================
 target_include_directories(ShaderRenderer PRIVATE
     src
     include
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/imgui
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/backends
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glfw/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glad/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glm
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/stb
+
+    # ImGui
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+
+    # STB
+    ${stb_SOURCE_DIR}
+
+    # GLAD
+    $<TARGET_PROPERTY:glad_gl,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
+# =========================
+# DEFINES
+# =========================
 target_compile_definitions(ShaderRenderer PRIVATE
     GLFW_INCLUDE_NONE
-    IMGUI_IMPL_OPENGL_LOADER_CUSTOM
+    IMGUI_IMPL_OPENGL_LOADER_GLAD
 )
 
+# =========================
+# LINK LIBRARIES
+# =========================
 target_link_libraries(ShaderRenderer PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/glfw/lib/glfw3.lib
+    glfw
+    glad_gl
+    glm::glm
     OpenGL::GL
     opengl32
 )
 
 # =========================
-# ASSETS (DEBUG / RELEASE SAFE)
+# ASSETS (FIXED - NO $<CONFIG> IN file())
 # =========================
 
-set(ASSET_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+set(IMAGE_SRC_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/src/images)
 
-set(SHADER_SRC_DIR ${ASSET_ROOT}/shaders)
-set(IMAGE_SRC_DIR  ${ASSET_ROOT}/src/images)
-
-# Multi-config safe destination folders
-set(SHADER_DST_DIR ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/shaders)
-set(IMAGE_DST_DIR  ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/images)
-
-# Ensure folders exist (per config)
-file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Debug/shaders)
-file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Release/shaders)
-file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Debug/images)
-file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/Release/images)
-
-# Copy shaders after build
+# Use generator expression ONLY in POST_BUILD (correct place)
 add_custom_command(TARGET ShaderRenderer POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${SHADER_SRC_DIR}
-    ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/shaders
-)
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:ShaderRenderer>/shaders
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:ShaderRenderer>/images
 
-# Copy images after build
-add_custom_command(TARGET ShaderRenderer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${IMAGE_SRC_DIR}
-    ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/images
+        ${SHADER_SRC_DIR}
+        $<TARGET_FILE_DIR:ShaderRenderer>/shaders
+
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${IMAGE_SRC_DIR}
+        $<TARGET_FILE_DIR:ShaderRenderer>/images
 )

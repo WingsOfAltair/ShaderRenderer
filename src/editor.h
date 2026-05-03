@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 #include <functional>
-#include <imgui/imgui.h>
+#include <imgui.h>
 
 enum class TokenType {
     Default,
