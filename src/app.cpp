@@ -2383,7 +2383,7 @@ void App::renderScene()
                 glBindTexture(GL_TEXTURE_2D, computeTexture);
             }
         }
-                else
+        else
         {
             shader.use();
             shader.setFloat("uTime", simulationTime);
