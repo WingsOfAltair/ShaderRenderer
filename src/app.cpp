@@ -277,100 +277,136 @@ bool App::init(int width, int height, const char* title)
     windowWidth = width;
     windowHeight = height;
 
-    // Initialize GLFW
+    // -----------------------------
+    // GLFW init
+    // -----------------------------
     if (!glfwInit()) {
-        std::cerr << "Failed to initialize GLFW" << std::endl;
+        std::cerr << "Failed to initialize GLFW\n";
         return false;
     }
 
-    // Configure GLFW
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    // IMPORTANT (VM COMPATIBILITY):
+    // Request a lower OpenGL version first (3.3 is safer in VMware)
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
+    // Optional but helps in VMs
+    glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+    glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE);
+
+    // -----------------------------
     // Create window
+    // -----------------------------
     window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     if (!window) {
-        std::cerr << "Failed to create GLFW window" << std::endl;
+        std::cerr << "Failed to create GLFW window\n";
         glfwTerminate();
         return false;
     }
+
     glfwMakeContextCurrent(window);
+    glfwSwapInterval(1); // vsync (stability in VM)
+
     glfwSetWindowUserPointer(window, this);
 
-    glfwSetWindowCloseCallback(window, [](GLFWwindow* w)
-    {
-        auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
-        if (app)
-            app->requestShutdown();
-    });
-
+    // -----------------------------
+    // Load OpenGL (GLAD)
+    // -----------------------------
     if (!gladLoadGL(glfwGetProcAddress)) {
-        std::cerr << "Failed to initialize OpenGL loader" << std::endl;
+        std::cerr << "Failed to initialize OpenGL loader\n";
         glfwDestroyWindow(window);
         glfwTerminate();
         return false;
     }
 
-    glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int ww, int hh)
-    {
-        auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
-        if (!app)
-            return;
+    std::cout << "OpenGL: " << glGetString(GL_VERSION) << "\n";
 
-        app->pendingWidth = (ww > 0) ? ww : 1;
-        app->pendingHeight = (hh > 0) ? hh : 1;
-        app->pendingResize = true;
-    });
+    // -----------------------------
+    // Resize callback (FIXED: no double user pointer reset)
+    // -----------------------------
+    glfwSetFramebufferSizeCallback(window,
+        [](GLFWwindow* w, int ww, int hh)
+        {
+            auto* app = static_cast<App*>(glfwGetWindowUserPointer(w));
+            if (!app) return;
 
-    glfwSetWindowUserPointer(window, this);
+            app->pendingWidth = std::max(ww, 1);
+            app->pendingHeight = std::max(hh, 1);
+            app->pendingResize = true;
+        });
+
+    // -----------------------------
+    // OpenGL state
+    // -----------------------------
+    glViewport(0, 0, width, height);
 
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glEnable(GL_DEBUG_OUTPUT);
-    glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
     glEnable(GL_PROGRAM_POINT_SIZE);
 
-    glDebugMessageCallback([](GLenum source, GLenum type, GLuint id,
-                            GLenum severity, GLsizei length,
-                            const GLchar* message, const void* userParam)
-    {
-        std::cerr << "GL DEBUG: " << message << std::endl;
-    }, nullptr);
+    // Debug output is NOT guaranteed in VM OpenGL 3.3
+    if (GLAD_GL_VERSION_4_3) {
+        glEnable(GL_DEBUG_OUTPUT);
+        glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 
-    // Initialize ImGui
+        glDebugMessageCallback(
+            [](GLenum, GLenum, GLuint, GLenum, GLsizei, const GLchar* msg, const void*)
+            {
+                std::cerr << "GL DEBUG: " << msg << "\n";
+            },
+            nullptr
+        );
+    }
+
+    // -----------------------------
+    // ImGui
+    // -----------------------------
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
     ImGui::StyleColorsDark();
+
     ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init("#version 430");
+    ImGui_ImplOpenGL3_Init("#version 330");
 
-    // Set default shader code
-    vertexCode = defaultVertexShader;
+    // -----------------------------
+    // Shader setup
+    // -----------------------------
+    vertexCode   = defaultVertexShader;
     fragmentCode = defaultFragmentShader;
-    computeCode = defaultComputeShader;
+    computeCode  = defaultComputeShader;
 
-    // Compile initial shaders
     compileShader();
-    displayShader.compile(defaultDisplayVertexShader, defaultDisplayFragmentShader, compileError);
+    displayShader.compile(
+        defaultDisplayVertexShader,
+        defaultDisplayFragmentShader,
+        compileError
+    );
+
     std::cout << "Display shader compile: " << compileError << std::endl;
 
-    // Create fullscreen quad, particle buffers, and compute resources
+    // -----------------------------
+    // GPU resources
+    // -----------------------------
     if (VAO) glDeleteVertexArrays(1, &VAO);
     if (VBO) glDeleteBuffers(1, &VBO);
+
     VAO = 0;
     VBO = 0;
 
     updateBuffers();
     createParticleBuffers(1024);
+
     loadLogoTexture();
     createErrorTexture();
 
@@ -383,10 +419,10 @@ bool App::init(int width, int height, const char* title)
     lastFrameTime = (float)glfwGetTime();
     computeDt = 0.016f;
 
-    // FIX: ensure textures exist before seeding
+    // Ping pong init
     createPingPongTextures(width, height);
 
-    pingPongReadTex = pingPongTexA;
+    pingPongReadTex  = pingPongTexA;
     pingPongWriteTex = pingPongTexB;
 
     seedPingPongTexture(pingPongReadTex, width, height);

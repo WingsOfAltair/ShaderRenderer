@@ -15,9 +15,11 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/glfw/glfw.git
     GIT_TAG        3.4
 )
+
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
 FetchContent_MakeAvailable(glfw)
 
 # --- GLM ---
@@ -28,7 +30,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
-# --- STB (NO VERSION TAG — FIXED) ---
+# --- STB ---
 FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
@@ -50,13 +52,14 @@ FetchContent_Declare(
     GIT_TAG        v2.0.8
     SOURCE_SUBDIR  cmake
 )
+
 set(GLAD_PROFILE "core" CACHE STRING "" FORCE)
 FetchContent_MakeAvailable(glad)
 
 glad_add_library(glad_gl REPRODUCIBLE API gl:core=4.6)
 
 # =========================
-# OpenGL
+# OpenGL (cross-platform safe)
 # =========================
 find_package(OpenGL REQUIRED)
 
@@ -85,7 +88,7 @@ add_executable(ShaderRenderer
 )
 
 # =========================
-# Includes
+# Include directories
 # =========================
 target_include_directories(ShaderRenderer PRIVATE
     src
@@ -103,7 +106,7 @@ target_include_directories(ShaderRenderer PRIVATE
 )
 
 # =========================
-# DEFINES
+# Defines
 # =========================
 target_compile_definitions(ShaderRenderer PRIVATE
     GLFW_INCLUDE_NONE
@@ -111,27 +114,29 @@ target_compile_definitions(ShaderRenderer PRIVATE
 )
 
 # =========================
-# LINK LIBRARIES
+# LINK LIBRARIES (FIXED)
 # =========================
 target_link_libraries(ShaderRenderer PRIVATE
     glfw
     glad_gl
     glm::glm
     OpenGL::GL
-    opengl32
 )
 
+# IMPORTANT:
+# removed opengl32 (Windows-only, breaks Linux builds)
+
 # =========================
-# ASSETS (FIXED - NO $<CONFIG> IN file())
+# ASSETS (FIXED + SAFE)
 # =========================
 
 set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set(IMAGE_SRC_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/src/images)
 
-# Use generator expression ONLY in POST_BUILD (correct place)
 add_custom_command(TARGET ShaderRenderer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
         $<TARGET_FILE_DIR:ShaderRenderer>/shaders
+
     COMMAND ${CMAKE_COMMAND} -E make_directory
         $<TARGET_FILE_DIR:ShaderRenderer>/images
 

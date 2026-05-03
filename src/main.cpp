@@ -3,13 +3,29 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#endif
+#include <string>
 
 bool alreadyRunning()
 {
-    CreateMutexA(NULL, TRUE, "ShaderRendererMutex");
+    HANDLE hMutex = CreateMutexA(NULL, TRUE, "ShaderRendererMutex");
     return GetLastError() == ERROR_ALREADY_EXISTS;
 }
+
+#else
+
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/file.h>
+
+bool alreadyRunning()
+{
+    int fd = open("/tmp/ShaderRenderer.lock", O_CREAT | O_RDWR, 0666);
+    if (fd < 0) return false;
+
+    return flock(fd, LOCK_EX | LOCK_NB) == -1;
+}
+
+#endif
 
 int main()
 {
