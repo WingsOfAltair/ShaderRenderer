@@ -2269,7 +2269,7 @@ void App::renderScene()
 
     if (renderOk)
     {
-                if (useComputeShader)
+        if (useComputeShader)
         {
             if (usePingPong)
             {
