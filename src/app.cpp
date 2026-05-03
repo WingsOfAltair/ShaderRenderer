@@ -178,9 +178,9 @@ App::App()
       pingPongTexA(0), pingPongTexB(0), pingPongReadTex(0), pingPongWriteTex(0),
       usePingPong(false), needsPingPongInit(true),
       particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
-            time(0.0f), simulationTime(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
-      isPlaying(true), animationDuration(60.0f), loopAnimation(true), fastForwardRate(5.0f),
-      isFastForwarding(false), isRewinding(false), showPlaybackBar(true),
+        time(0.0f), simulationTime(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
+        isPlaying(true), animationDuration(60.0f), loopAnimation(true), fastForwardRate(5.0f),
+      isFastForwarding(false), isRewinding(false), showPlaybackBar(true), resetTimeOnCompile(false),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       
       hintTimer(0.0f), showHint(false),
@@ -712,12 +712,12 @@ void App::renderUI()
             vertexCode = vertexBuf;
 
         if (ImGui::Button("Compile"))
-            compileShader();
+            compileShader(resetTimeOnCompile);
 
         if (ImGui::Button("Reset"))
         {
             vertexCode = defaultVertexShader;
-            compileShader();
+            compileShader(resetTimeOnCompile);
         }
 
         ImGui::End();
@@ -738,12 +738,12 @@ void App::renderUI()
             fragmentCode = fragmentBuf;
 
         if (ImGui::Button("Compile"))
-            compileShader();
+            compileShader(resetTimeOnCompile);
 
         if (ImGui::Button("Reset"))
         {
             fragmentCode = defaultFragmentShader;
-            compileShader();
+            compileShader(resetTimeOnCompile);
         }
 
         ImGui::End();
@@ -2127,6 +2127,12 @@ void App::renderPlaybackBar()
     ImGui::SetItemTooltip(loopAnimation ? "Loop ON  (click to disable)" : "Loop OFF (click to enable)");
 
     // ── Row 2 extras: speed & duration ──────────────────────────────
+    ImGui::SameLine(0.0f, 24.0f);
+    ImGui::Checkbox("Reset time on compile", &resetTimeOnCompile);
+    ImGui::SetItemTooltip(
+        "ON  -> simulationTime resets to 0 on every successful compile\n"
+        "OFF -> simulationTime continues from where it was (accumulated offset)");
+
     ImGui::SameLine(0.0f, 24.0f);
     ImGui::SetNextItemWidth(130.0f);
     ImGui::SliderFloat("##speed", &simulationSpeed, 0.1f, 10000.0f, "Speed %.2fx", ImGuiSliderFlags_Logarithmic);

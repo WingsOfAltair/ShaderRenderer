@@ -126,7 +126,7 @@ private:
     float simulationSpeed;
     float computeDt;
 
-    // Playback controls
+        // Playback controls
     bool  isPlaying;
     float animationDuration;
     bool  loopAnimation;
@@ -134,6 +134,7 @@ private:
     bool  isFastForwarding;
     bool  isRewinding;
     bool  showPlaybackBar;
+    bool  resetTimeOnCompile;
 
     // Editor
     ShaderEditor vertexEditor;
