@@ -135,6 +135,7 @@ private:
     bool  isRewinding;
     bool  showPlaybackBar;
     bool  resetTimeOnCompile;
+    bool  useLogoAsChannel0;
 
     // Editor
     ShaderEditor vertexEditor;

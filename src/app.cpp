@@ -180,7 +180,7 @@ App::App()
       particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
         time(0.0f), simulationTime(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
         isPlaying(true), animationDuration(60.0f), loopAnimation(true), fastForwardRate(5.0f),
-      isFastForwarding(false), isRewinding(false), showPlaybackBar(true), resetTimeOnCompile(false),
+      isFastForwarding(false), isRewinding(false), showPlaybackBar(true), resetTimeOnCompile(false), useLogoAsChannel0(false),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       
       hintTimer(0.0f), showHint(false),
@@ -2133,6 +2133,12 @@ void App::renderPlaybackBar()
         "ON  -> simulationTime resets to 0 on every successful compile\n"
         "OFF -> simulationTime continues from where it was (accumulated offset)");
 
+    ImGui::SameLine(0.0f, 16.0f);
+    ImGui::Checkbox("Logo as iChannel0", &useLogoAsChannel0);
+    ImGui::SetItemTooltip(
+        "ON  -> iChannel0 samples the logo texture (the 'after-error' look)\n"
+        "OFF -> iChannel0 is unbound, returns black (the clean compile look)");
+
     ImGui::SameLine(0.0f, 24.0f);
     ImGui::SetNextItemWidth(130.0f);
     ImGui::SliderFloat("##speed", &simulationSpeed, 0.1f, 10000.0f, "Speed %.2fx", ImGuiSliderFlags_Logarithmic);
@@ -2377,13 +2383,19 @@ void App::renderScene()
                 glBindTexture(GL_TEXTURE_2D, computeTexture);
             }
         }
-        else
+                else
         {
             shader.use();
             shader.setFloat("uTime", simulationTime);
             shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
             shader.setVec2("uMouse", 0.0f, 0.0f);
             shader.setFloat("dt", computeDt);
+            shader.setInt("iChannel0", 0);
+            glActiveTexture(GL_TEXTURE0);
+            if (useLogoAsChannel0 && logoLoaded && logoTexture != 0)
+                glBindTexture(GL_TEXTURE_2D, logoTexture);
+            else
+                glBindTexture(GL_TEXTURE_2D, 0);
         }
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
