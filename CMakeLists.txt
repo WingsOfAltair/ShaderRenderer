@@ -4,63 +4,58 @@ project(ShaderRenderer VERSION 1.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# =========================
-# FetchContent
-# =========================
 include(FetchContent)
 
-# --- GLFW ---
-FetchContent_Declare(
-    glfw
+# =========================
+# GLFW
+# =========================
+FetchContent_Declare(glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG        3.4
+    GIT_TAG 3.4
 )
-
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-
 FetchContent_MakeAvailable(glfw)
 
-# --- GLM ---
-FetchContent_Declare(
-    glm
+# =========================
+# GLM
+# =========================
+FetchContent_Declare(glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG        1.0.1
+    GIT_TAG 1.0.1
 )
 FetchContent_MakeAvailable(glm)
 
-# --- STB ---
-FetchContent_Declare(
-    stb
+# =========================
+# STB
+# =========================
+FetchContent_Declare(stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
 )
 FetchContent_MakeAvailable(stb)
 
-# --- ImGui ---
-FetchContent_Declare(
-    imgui
+# =========================
+# ImGui
+# =========================
+FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        v1.91.9
+    GIT_TAG v1.91.9
 )
 FetchContent_MakeAvailable(imgui)
 
-# --- GLAD 2 ---
-FetchContent_Declare(
-    glad
+# =========================
+# GLAD
+# =========================
+FetchContent_Declare(glad
     GIT_REPOSITORY https://github.com/Dav1dde/glad.git
-    GIT_TAG        v2.0.8
-    SOURCE_SUBDIR  cmake
+    GIT_TAG v2.0.8
+    SOURCE_SUBDIR cmake
 )
-
 set(GLAD_PROFILE "core" CACHE STRING "" FORCE)
 FetchContent_MakeAvailable(glad)
+glad_add_library(glad_gl REPRODUCIBLE API gl:core=3.3)
 
-glad_add_library(glad_gl REPRODUCIBLE API gl:core=4.6)
-
-# =========================
-# OpenGL (cross-platform safe)
-# =========================
 find_package(OpenGL REQUIRED)
 
 # =========================
@@ -87,35 +82,18 @@ add_executable(ShaderRenderer
     ${IMGUI_SOURCES}
 )
 
-# =========================
-# Include directories
-# =========================
 target_include_directories(ShaderRenderer PRIVATE
     src
     include
-
-    # ImGui
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
-
-    # STB
     ${stb_SOURCE_DIR}
-
-    # GLAD
-    $<TARGET_PROPERTY:glad_gl,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
-# =========================
-# Defines
-# =========================
 target_compile_definitions(ShaderRenderer PRIVATE
     GLFW_INCLUDE_NONE
-    IMGUI_IMPL_OPENGL_LOADER_GLAD
 )
 
-# =========================
-# LINK LIBRARIES (FIXED)
-# =========================
 target_link_libraries(ShaderRenderer PRIVATE
     glfw
     glad_gl
@@ -123,28 +101,81 @@ target_link_libraries(ShaderRenderer PRIVATE
     OpenGL::GL
 )
 
-# IMPORTANT:
-# removed opengl32 (Windows-only, breaks Linux builds)
-
 # =========================
-# ASSETS (FIXED + SAFE)
+# FONT DOWNLOAD (ROBUST FIX)
 # =========================
 
-set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
-set(IMAGE_SRC_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/src/images)
+set(FONTS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fonts)
+file(MAKE_DIRECTORY ${FONTS_DIR})
+
+set(NOTO_SANS "${FONTS_DIR}/NotoSans-Regular.ttf")
+set(NOTO_SYMBOLS "${FONTS_DIR}/fa-solid-900.ttf")
+
+function(download_file url output)
+    if(EXISTS "${output}")
+        message(STATUS "Font exists: ${output}")
+        return()
+    endif()
+
+    set(tries 3)
+    set(success FALSE)
+
+    foreach(i RANGE 1 ${tries})
+        message(STATUS "Downloading (${i}/${tries}): ${url}")
+
+        file(DOWNLOAD
+            "${url}"
+            "${output}"
+            SHOW_PROGRESS
+            STATUS status
+            TLS_VERIFY ON
+        )
+
+        list(GET status 0 code)
+
+        if(code EQUAL 0)
+            set(success TRUE)
+            break()
+        else()
+            list(GET status 1 msg)
+            message(WARNING "Attempt ${i} failed: ${msg}")
+        endif()
+    endforeach()
+
+    if(NOT success)
+        message(WARNING "Font failed but build continues: ${output}")
+    endif()
+endfunction()
+
+# =========================
+# FONT URLs (FIXED RAW LINKS)
+# =========================
+download_file(
+    "https://raw.githubusercontent.com/openmaptiles/fonts/refs/heads/master/noto-sans/NotoSans-Regular.ttf"
+    "${NOTO_SANS}"
+)
+
+download_file(
+    "https://raw.githubusercontent.com/components/font-awesome/refs/heads/master/webfonts/fa-solid-900.ttf"
+    "${NOTO_SYMBOLS}"
+)
+
+# =========================
+# ASSETS COPY
+# =========================
+set(SHADERS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+set(IMAGES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/images)
 
 add_custom_command(TARGET ShaderRenderer POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_FILE_DIR:ShaderRenderer>/shaders
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderRenderer>/fonts
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderRenderer>/shaders
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:ShaderRenderer>/images
 
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_FILE_DIR:ShaderRenderer>/images
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${FONTS_DIR} $<TARGET_FILE_DIR:ShaderRenderer>/fonts
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${SHADERS_DIR} $<TARGET_FILE_DIR:ShaderRenderer>/shaders
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${IMAGES_DIR} $<TARGET_FILE_DIR:ShaderRenderer>/images
+)
 
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${SHADER_SRC_DIR}
-        $<TARGET_FILE_DIR:ShaderRenderer>/shaders
-
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${IMAGE_SRC_DIR}
-        $<TARGET_FILE_DIR:ShaderRenderer>/images
+set_target_properties(ShaderRenderer PROPERTIES
+    VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:ShaderRenderer>"
 )

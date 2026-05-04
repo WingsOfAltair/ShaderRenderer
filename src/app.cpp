@@ -351,7 +351,12 @@ bool App::init(int width, int height, const char* title)
     glEnable(GL_PROGRAM_POINT_SIZE);
 
     // Debug output is NOT guaranteed in VM OpenGL 3.3
-    if (GLAD_GL_VERSION_4_3) {
+    int major = 0, minor = 0;
+    glGetIntegerv(GL_MAJOR_VERSION, &major);
+    glGetIntegerv(GL_MINOR_VERSION, &minor);
+
+    if ((major > 4 || (major == 4 && minor >= 3)) && glDebugMessageCallback)
+    {
         glEnable(GL_DEBUG_OUTPUT);
         glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 
@@ -374,10 +379,92 @@ bool App::init(int width, int height, const char* title)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
-    ImGui::StyleColorsDark();
+    // -----------------------------
+    // FONT (must be loaded BEFORE backend init)
+    // -----------------------------
+        // -----------------------------
+    // FONT (must be loaded BEFORE backend init)
+    // -----------------------------
+    namespace fs = std::filesystem;
 
+    fs::path exeDir = getExecutableDirectory();
+    fs::path sansPath  = exeDir / "fonts/NotoSans-Regular.ttf";
+    fs::path emojiPath = exeDir / "fonts/fa-solid-900.ttf";
+
+    ImFont* uiFont = nullptr;
+
+    // =========================
+    // 1. LOAD BASE FONT FIRST
+    // =========================
+    if (!fs::exists(sansPath))
+    {
+        std::cerr << "FATAL: Missing NotoSans font\n";
+        return false;
+    }
+
+    static const ImWchar sansRanges[] = {
+        0x0020, 0x00FF,
+        0x2190, 0x21FF,
+        0
+    };
+
+    uiFont = io.Fonts->AddFontFromFileTTF(
+        sansPath.u8string().c_str(),
+        18.0f,
+        nullptr,
+        sansRanges
+    );
+
+    if (!uiFont)
+    {
+        std::cerr << "FATAL: Failed to load NotoSans\n";
+        return false;
+    }
+    // =========================
+    // 2. MERGE EMOJI BEFORE BUILD
+    // =========================
+    if (fs::exists(emojiPath))
+    {
+        ImFontConfig cfg;
+        cfg.MergeMode = true;
+        cfg.PixelSnapH = true;
+        cfg.OversampleH = 1;
+        cfg.OversampleV = 1;
+        cfg.GlyphMinAdvanceX = 0;
+
+        static const ImWchar emojiRanges[] = {
+             0xe000, 0xf8ff, 0
+        };
+
+        if (!io.Fonts->AddFontFromFileTTF(
+                emojiPath.u8string().c_str(),
+                18.0f,
+                &cfg,
+                emojiRanges))
+        {
+            std::cerr << "WARNING: Emoji font failed to load\n";
+        }
+    }
+    else
+    {
+        std::cerr << "WARNING: Emoji font missing\n";
+    }
+
+    // =========================
+    // 3. CRITICAL: BUILD ATLAS ONCE
+    // =========================
+    io.FontDefault = uiFont;
+
+    // -----------------------------
+    // Backend init (SAFE ORDER)
+    // -----------------------------
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
+
+    // -----------------------------
+    // Style
+    // -----------------------------
+    ImGui::StyleColorsDark();
 
     // -----------------------------
     // Shader setup
@@ -413,8 +500,20 @@ bool App::init(int width, int height, const char* title)
     createFBO(backgroundFBO, backgroundTex);
     createFBO(shaderFBO, shaderTex);
 
-    createComputeTexture(windowWidth, windowHeight);
-    compileComputeShader();
+    const char* version = (const char*)glGetString(GL_VERSION);
+    std::cout << "GL Version String: " << version << "\n";
+
+    bool hasCompute = strstr(version, "4.3") || strstr(version, "4.4") || strstr(version, "4.5") || strstr(version, "4.6");
+
+    if (hasCompute)
+    {
+        createComputeTexture(windowWidth, windowHeight);
+        compileComputeShader();
+    }
+    else
+    {
+        std::cout << "Compute shaders not supported, skipping...\n";
+    }
 
     lastFrameTime = (float)glfwGetTime();
     computeDt = 0.016f;
@@ -2019,6 +2118,8 @@ void App::renderPlaybackBar()
 {
     if (!showPlaybackBar) return;
 
+    ImGui::PushFont(uiFont); 
+
     ImGuiIO& io = ImGui::GetIO();
 
     // Anchor to bottom of screen
@@ -2108,7 +2209,8 @@ void App::renderPlaybackBar()
     ImGui::SetCursorPosX((barWidth - totalBtns) * 0.5f);
 
     // ⏮  Rewind to start
-    if (ImGui::Button("⏮##rew", ImVec2(btnW, 0)))
+    if (ImGui::Button("\xef\x81\x88##rew", ImVec2(btnW, 0)))
+    if (ImGui::Button("Rewind to Start##rew", ImVec2(btnW, 0)))
     {
         simulationTime = 0.0f;
         isPlaying      = false;
@@ -2116,12 +2218,12 @@ void App::renderPlaybackBar()
     ImGui::SetItemTooltip("Rewind to start");
     ImGui::SameLine();
 
-        // ⏪  Hold to rewind
+    // ⏪  Hold to rewind
     // Reset flags here — previous frame's values already drove the time advance above
     isFastForwarding = false;
     isRewinding      = false;
 
-    bool rwHeld = ImGui::Button("⏪##rw", ImVec2(btnW, 0));
+    bool rwHeld = ImGui::Button("\xef\x81\x89##rw", ImVec2(btnW, 0));
     ImGui::SetItemTooltip("Hold: rewind  |  Click: step -1s");
     if (ImGui::IsItemActive() && ImGui::IsMouseDown(0))
         isRewinding = true;
@@ -2130,14 +2232,14 @@ void App::renderPlaybackBar()
     ImGui::SameLine();
 
     // ⏯  Play / Pause
-    const char* playLabel = isPlaying ? "⏸##pp" : "▶##pp";
+    const char* playLabel = isPlaying ? "\xef\x81\x8c##pp" : "\xef\x81\x8b##pp";
     if (ImGui::Button(playLabel, ImVec2(btnW, 0)))
         isPlaying = !isPlaying;
     ImGui::SetItemTooltip(isPlaying ? "Pause" : "Play");
     ImGui::SameLine();
 
     // ⏩  Hold to fast-forward
-    bool ffHeld = ImGui::Button("⏩##ff", ImVec2(btnW, 0));
+    bool ffHeld = ImGui::Button("\xef\x81\x90##ff", ImVec2(btnW, 0));
     ImGui::SetItemTooltip("Hold: fast-forward  |  Click: step +1s");
     if (ImGui::IsItemActive() && ImGui::IsMouseDown(0))
         isFastForwarding = true;
@@ -2146,7 +2248,7 @@ void App::renderPlaybackBar()
     ImGui::SameLine();
 
     // ⏭  Jump to end
-    if (ImGui::Button("⏭##end", ImVec2(btnW, 0)))
+    if (ImGui::Button("\xef\x81\x91##end", ImVec2(btnW, 0)))
     {
         simulationTime = animationDuration;
         isPlaying      = false;
@@ -2157,7 +2259,7 @@ void App::renderPlaybackBar()
     // 🔁  Loop toggle
     ImGui::PushStyleColor(ImGuiCol_Button,
         loopAnimation ? IM_COL32(40, 130, 200, 200) : IM_COL32(60, 60, 60, 200));
-    if (ImGui::Button("🔁##loop", ImVec2(btnW, 0)))
+    if (ImGui::Button("\xef\x81\xb9##loop", ImVec2(btnW, 0)))
         loopAnimation = !loopAnimation;
     ImGui::PopStyleColor();
     ImGui::SetItemTooltip(loopAnimation ? "Loop ON  (click to disable)" : "Loop OFF (click to enable)");
@@ -2177,20 +2279,22 @@ void App::renderPlaybackBar()
 
     ImGui::SameLine(0.0f, 24.0f);
     ImGui::SetNextItemWidth(130.0f);
-    ImGui::SliderFloat("##speed", &simulationSpeed, 0.1f, 10000.0f, "Speed %.2fx", ImGuiSliderFlags_Logarithmic);
+    ImGui::SliderFloat("Speed##speed", &simulationSpeed, 0.1f, 10000.0f, "Speed %.2fx", ImGuiSliderFlags_Logarithmic);
     ImGui::SetItemTooltip("Simulation speed (logarithmic). Ctrl+Click to type a value. Shared with Compute panel.");
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100.0f);
-    ImGui::SliderFloat("##dur", &animationDuration, 5.0f, 3600.0f, "%.0fs");
+    ImGui::SliderFloat("Duration##dur", &animationDuration, 5.0f, 3600.0f, "%.0fs");
     ImGui::SetItemTooltip("Total animation duration (seconds)");
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(80.0f);
-    ImGui::SliderFloat("##ffrate", &fastForwardRate, 2.0f, 32.0f, "FF %.0fx");
+    ImGui::SliderFloat("Fast-Forward Rate##ffrate", &fastForwardRate, 2.0f, 32.0f, "FF %.0fx");
     ImGui::SetItemTooltip("Fast-forward / rewind multiplier");
 
     ImGui::End();
+
+    ImGui::PopFont(); 
 }
 
 void App::renderScene()

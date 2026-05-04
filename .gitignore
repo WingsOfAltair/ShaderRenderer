@@ -1,3 +1,6 @@
 /build
 /CMakeFiles
 /.vscode
+/.vs
+/out
+/fonts

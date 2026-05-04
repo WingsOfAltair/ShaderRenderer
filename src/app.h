@@ -189,5 +189,7 @@ private:
     bool shuttingDown = false;
     bool forceRecompute = false;
     bool framebufferResized = false;
+
+    ImFont* uiFont = nullptr;
 };
 
