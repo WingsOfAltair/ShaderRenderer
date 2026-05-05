@@ -2648,10 +2648,16 @@ void App::renderScene()
                 {
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, pingPongReadTex);
+                    
+                    // Added MOSFET/Texture-based uniforms for consistency
                     shader.setInt("densityTex", 0);
                     shader.setInt("iChannel0", 0);
+                    shader.setFloat("gateVoltage", gateVoltage);
                 }
                 shader.setFloat("uTime",     simulationTime);
+                shader.setFloat("iTime",     simulationTime);
+                shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                shader.setVec2("iResolution", (float)windowWidth, (float)windowHeight);
                 shader.setFloat("dt", computeDt);
                 shader.setFloat("gateVoltage", gateVoltage);
             }
@@ -2662,6 +2668,10 @@ void App::renderScene()
                 const std::string& updateSrc = combined.computeSources.updateSource;
 
                 computeShader.use();
+                computeShader.setFloat("uTime", simulationTime);
+                computeShader.setFloat("iTime", simulationTime);
+                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                computeShader.setVec2("iResolution", (float)windowWidth, (float)windowHeight);
                 bool bindComputeTextureToBoth = computeSourceUsesWriteBinding1(updateSrc);
                 if (bindComputeTextureToBoth)
                 {
@@ -2706,12 +2716,15 @@ void App::renderScene()
                 glBindTexture(GL_TEXTURE_2D, computeTexture);
             }
         }
-        else
+                else
         {
             shader.use();
             shader.setFloat("uTime", simulationTime);
+            shader.setFloat("iTime", simulationTime);
             shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+            shader.setVec2("iResolution", (float)windowWidth, (float)windowHeight);
             shader.setVec2("uMouse", 0.0f, 0.0f);
+            shader.setVec2("iMouse", 0.0f, 0.0f);
             shader.setFloat("dt", computeDt);
             shader.setInt("iChannel0", 0);
             glActiveTexture(GL_TEXTURE0);
