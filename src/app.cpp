@@ -2389,23 +2389,30 @@ void App::renderScene()
             needsPingPongInit = true;
         }
 
-        // The Iterative Engine (sub-stepping) catches up internalSimTime to simulationTime.
-        // We run this regardless of 'isPlaying' so that manual scrubbing works.
+            // --- High Speed Simulation Catch-up ---
+    // Only run the iterative sub-stepping engine for texture simulations (MOSFET, Game of Life)
+    // Particle simulations (N-Body) should use the standard single-pass logic below.
+    if (renderOk && useComputeShader && useIterativeEngine)
+    {
+        // Handle Rewind/Reset for iterative engine
+        // Added epsilon to prevent flickering from floating point precision jitter
+        if (simulationTime < internalSimTime - 0.0001f)
+        {
+            internalSimTime = 0.0f;
+            needInitDispatch = true;
+            needsPingPongInit = true;
+        }
+
         if (simulationTime > internalSimTime)
         {
-            float stepSize = 0.016f; 
+            const float stepSize = 0.016f; 
             
             // Determine how many steps to perform this frame.
-            // If the user is just playing, we use a cap based on speed.
-            // If the user is scrubbing (jump is large), we allow more steps or jump the clock.
             int maxStepsPerFrame = (simulationSpeed > 100.0f) ? 40 : 10;
             if (simulationSpeed > 300.0f) maxStepsPerFrame = 100;
             
-            // Jump logic: If we are way behind (e.g. manual scrub), 
-            // don't try to simulate the entire history if it would hang.
+            // Jump logic: If we are way behind, move internal clock closer.
             if (simulationTime - internalSimTime > 2.0f) {
-                // If jump is more than 2 seconds, move internal clock closer
-                // to start the catch-up from a reasonable offset.
                 internalSimTime = simulationTime - 1.0f;
             }
 
@@ -2414,7 +2421,7 @@ void App::renderScene()
             {
                 if (usePingPong)
                 {
-                     if (needsPingPongInit || (useDualComputeShader && needInitDispatch))
+                    if (needsPingPongInit || (useDualComputeShader && needInitDispatch))
                     {
                         if (useR8UIPingPong) seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
                         else if (useDualComputeShader && initComputeValid)
@@ -2425,7 +2432,7 @@ void App::renderScene()
                             initComputeShader.setFloat("gateVoltage", gateVoltage);
                             glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, useR8UIPingPong ? GL_R8UI : GL_RGBA32F);
                             glDispatchCompute(((GLuint)windowWidth + 15) / 16, ((GLuint)windowHeight + 15) / 16, 1);
-                            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
                         }
                         needsPingPongInit = false;
                         needInitDispatch = false;
@@ -2445,7 +2452,10 @@ void App::renderScene()
                     int lx = parseLocalSize(computeCode, "x", 16);
                     int ly = parseLocalSize(computeCode, "y", 16);
                     glDispatchCompute(((GLuint)windowWidth + lx - 1) / lx, ((GLuint)windowHeight + ly - 1) / ly, 1);
-                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                    
+                    // Critical: Combined barrier for both next-step load and eventual fragment shader fetch
+                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+                    
                     std::swap(pingPongReadTex, pingPongWriteTex);
                 }
                 
@@ -2453,6 +2463,7 @@ void App::renderScene()
                 stepsPerformed++;
             }
         }
+    }
     }
 
     if (useParticleMode)
