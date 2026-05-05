@@ -589,7 +589,7 @@ void App::run()
                 // --- Advance simulation time according to playback state ---
                 lastSimulationTime = simulationTime;
 
-                if (isPlaying || isFastForwarding || isRewinding)
+                                if (isPlaying || isFastForwarding || isRewinding)
                 {
                     float effectiveSpeed = simulationSpeed;
                     if (isFastForwarding) effectiveSpeed *= fastForwardRate;
@@ -622,6 +622,11 @@ void App::run()
                 else
                 {
                     computeDt = 0.0f;
+                    // Fix: When paused, keep internal clock locked to playback head
+                    // so the iterative engine (Game of Life, MOSFET) doesn't keep running.
+                    if (useIterativeEngine) {
+                        internalSimTime = simulationTime;
+                    }
                 }
 
         // -------------------------
@@ -2272,10 +2277,15 @@ void App::renderPlaybackBar()
 
     // ⏮  Rewind to start
     if (ImGui::Button("\xef\x81\x88##rew", ImVec2(btnW, 0)))
-    if (ImGui::Button("Rewind to Start##rew", ImVec2(btnW, 0)))
     {
         simulationTime = 0.0f;
         isPlaying      = false;
+        
+        // Force a reset of the iterative engine state
+        if (useIterativeEngine) {
+            internalSimTime = 0.0f;
+            needsPingPongInit = true;
+        }
     }
     ImGui::SetItemTooltip("Rewind to start");
     ImGui::SameLine();
@@ -2376,19 +2386,6 @@ void App::renderScene()
         renderOk = renderOk && computeValid;
     }
 
-        // --- High Speed Simulation Catch-up ---
-    // Only run the iterative sub-stepping engine for texture simulations (MOSFET, Game of Life)
-    // Particle simulations (N-Body) should use the standard single-pass logic below.
-    if (renderOk && useComputeShader && useIterativeEngine)
-    {
-        // Handle Rewind/Reset for iterative engine
-        if (simulationTime < internalSimTime)
-        {
-            internalSimTime = 0.0f;
-            needInitDispatch = true;
-            needsPingPongInit = true;
-        }
-
             // --- High Speed Simulation Catch-up ---
     // Only run the iterative sub-stepping engine for texture simulations (MOSFET, Game of Life)
     // Particle simulations (N-Body) should use the standard single-pass logic below.
@@ -2463,7 +2460,6 @@ void App::renderScene()
                 stepsPerformed++;
             }
         }
-    }
     }
 
     if (useParticleMode)
@@ -2574,12 +2570,16 @@ void App::renderScene()
                 // Note: The main simulation loop above now handles the high-speed steps.
                 // This section now only handles the render pass setup.
 
-                // Render pass
+                                // Render pass
                 shader.use();
                 if (useR8UIPingPong)
                 {
                     glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
                     shader.setVec2("resolution", (float)windowWidth, (float)windowHeight);
+                    
+                    // Added Game of Life uniforms
+                    shader.setVec2("offset", 0.0f, 0.0f);
+                    shader.setFloat("scale", 1.0f);
                 }
                 else
                 {
