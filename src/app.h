@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <map>
 #include <glad/gl.h>
 
 struct ShaderPreset {
@@ -118,8 +119,8 @@ private:
     bool usePingPong;           // true when compute uses r8ui or rgba32f ping-pong
     bool useR8UIPingPong;       // specifically for Game of Life style
     bool needsPingPongInit;     // true until first frame seeds random cell data
-    bool useIterativeEngine;    // true for texture-based simulations that need sub-stepping
-    float gateVoltage;          // MOSFET simulation parameter
+        bool useIterativeEngine;    // true for texture-based simulations that need sub-stepping
+    std::map<std::string, float> dynamicUniforms; // Dynamic float uniforms detected in shader
     float pingPongAccumulator;  // fractional step accumulator for speed control
     GLuint particleVAO;
     GLuint particleBufferA;
