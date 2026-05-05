@@ -178,7 +178,9 @@ void App::handleResize()
 
 App::App()
     : window(nullptr), windowWidth(1280), windowHeight(720), pendingWidth(1280), pendingHeight(720), pendingResize(false),
+      prevWindowX(0), prevWindowY(0), prevWindowWidth(1280), prevWindowHeight(720), isFullscreen(false),
       shaderValid(false), computeValid(false), initComputeValid(false), useComputeShader(false), useParticleMode(false),
+
       useDualComputeShader(false), needInitDispatch(false), particleHasForce(true),
             computeTexture(0),
       pingPongTexA(0), pingPongTexB(0), pingPongReadTex(0), pingPongWriteTex(0),
@@ -302,9 +304,10 @@ bool App::init(int width, int height, const char* title)
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-    // Optional but helps in VMs
+        // Optional but helps in VMs
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     glfwWindowHint(GLFW_DOUBLEBUFFER, GLFW_TRUE);
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
     // -----------------------------
     // Create window
@@ -316,7 +319,16 @@ bool App::init(int width, int height, const char* title)
         return false;
     }
 
+    // Get actual maximized size
+    int fbW, fbH;
+    glfwGetFramebufferSize(window, &fbW, &fbH);
+    windowWidth = fbW;
+    windowHeight = fbH;
+    pendingWidth = fbW;
+    pendingHeight = fbH;
+
     glfwMakeContextCurrent(window);
+
     glfwSwapInterval(1); // vsync (stability in VM)
 
     glfwSetWindowUserPointer(window, this);
@@ -347,10 +359,11 @@ bool App::init(int width, int height, const char* title)
             app->pendingResize = true;
         });
 
-    // -----------------------------
+        // -----------------------------
     // OpenGL state
     // -----------------------------
-    glViewport(0, 0, width, height);
+    glViewport(0, 0, windowWidth, windowHeight);
+
 
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -525,14 +538,15 @@ bool App::init(int width, int height, const char* title)
     lastFrameTime = (float)glfwGetTime();
     computeDt = 0.016f;
 
-    // Ping pong init
-    createPingPongTextures(width, height);
+        // Ping pong init
+    createPingPongTextures(windowWidth, windowHeight);
 
     pingPongReadTex  = pingPongTexA;
     pingPongWriteTex = pingPongTexB;
 
-    seedPingPongTexture(pingPongReadTex, width, height);
-    seedPingPongTexture(pingPongWriteTex, width, height);
+    seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
+    seedPingPongTexture(pingPongWriteTex, windowWidth, windowHeight);
+
 
     needsPingPongInit = false;
     forceRecompute = false;
@@ -549,6 +563,32 @@ void App::requestShutdown()
 
     if (window)
         glfwSetWindowShouldClose(window, GLFW_TRUE);
+}
+
+void App::toggleFullscreen()
+{
+    if (!window) return;
+
+    if (isFullscreen)
+    {
+        // Restore windowed mode
+        glfwSetWindowMonitor(window, nullptr, prevWindowX, prevWindowY, prevWindowWidth, prevWindowHeight, 0);
+        isFullscreen = false;
+    }
+    else
+    {
+        // Save current windowed position and size
+        glfwGetWindowPos(window, &prevWindowX, &prevWindowY);
+        glfwGetWindowSize(window, &prevWindowWidth, &prevWindowHeight);
+
+        // Get primary monitor information
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+
+        // Switch to fullscreen
+        glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+        isFullscreen = true;
+    }
 }
 
 void App::run()
@@ -572,6 +612,18 @@ void App::run()
             showHint = true;
             hintTimer = 0.0f;
         }
+
+        if (glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS)
+        {
+            static float lastToggleTime = 0.0f;
+            float currentTime = (float)glfwGetTime();
+            if (currentTime - lastToggleTime > 0.5f)
+            {
+                toggleFullscreen();
+                lastToggleTime = currentTime;
+            }
+        }
+
 
         // -------------------------
         // Update
@@ -739,9 +791,13 @@ void App::renderUI()
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("View"))
+                if (ImGui::BeginMenu("View"))
         {
+            if (ImGui::MenuItem("Fullscreen", "F11", isFullscreen))
+                toggleFullscreen();
+            ImGui::Separator();
             ImGui::MenuItem("Help", nullptr, &showHelp);
+
             ImGui::MenuItem("Vertex Shader", nullptr, &showVertexEditor);
             ImGui::MenuItem("Fragment Shader", nullptr, &showFragmentEditor);
             ImGui::MenuItem("Compute Shader", nullptr, &showComputeEditor);
@@ -847,21 +903,24 @@ void App::renderUI()
     // FIXED SHADER EDITOR WINDOWS (IMPORTANT PATCH)
     // =========================
 
-    // Vertex Shader
+        // Vertex Shader
     if (showVertexEditor)
     {
-        ImGui::SetNextWindowSize(ImVec2(450, 450), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(500, 600), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowPos(ImVec2(10, 60), ImGuiCond_FirstUseEver);
 
         ImGui::Begin("Vertex Shader", &showVertexEditor);
 
-        static char vertexBuf[8192];
-        strcpy(vertexBuf, vertexCode.c_str());
+        static char vertexBuf[1048576]; // 1MB buffer
+        strncpy(vertexBuf, vertexCode.c_str(), sizeof(vertexBuf) - 1);
+        vertexBuf[sizeof(vertexBuf) - 1] = '\0';
 
-        if (ImGui::InputTextMultiline("##v", vertexBuf, sizeof(vertexBuf), ImVec2(-1, -1)))
+        float footerHeight = ImGui::GetFrameHeightWithSpacing() * 2.5f;
+        if (ImGui::InputTextMultiline("##v", vertexBuf, sizeof(vertexBuf), ImVec2(-FLT_MIN, -footerHeight), ImGuiInputTextFlags_AllowTabInput))
             vertexCode = vertexBuf;
 
         if (ImGui::Button("Compile"))
+
             compileShader(resetTimeOnCompile);
 
         if (ImGui::Button("Reset"))
@@ -873,21 +932,24 @@ void App::renderUI()
         ImGui::End();
     }
 
-    // Fragment Shader
+        // Fragment Shader
     if (showFragmentEditor)
     {
-        ImGui::SetNextWindowSize(ImVec2(450, 450), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowPos(ImVec2(370, 60), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(500, 600), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(520, 60), ImGuiCond_FirstUseEver);
 
         ImGui::Begin("Fragment Shader", &showFragmentEditor);
 
-        static char fragmentBuf[8192];
-        strcpy(fragmentBuf, fragmentCode.c_str());
+        static char fragmentBuf[1048576]; // 1MB buffer
+        strncpy(fragmentBuf, fragmentCode.c_str(), sizeof(fragmentBuf) - 1);
+        fragmentBuf[sizeof(fragmentBuf) - 1] = '\0';
 
-        if (ImGui::InputTextMultiline("##f", fragmentBuf, sizeof(fragmentBuf), ImVec2(-1, -1)))
+        float footerHeight = ImGui::GetFrameHeightWithSpacing() * 2.5f;
+        if (ImGui::InputTextMultiline("##f", fragmentBuf, sizeof(fragmentBuf), ImVec2(-FLT_MIN, -footerHeight), ImGuiInputTextFlags_AllowTabInput))
             fragmentCode = fragmentBuf;
 
         if (ImGui::Button("Compile"))
+
             compileShader(resetTimeOnCompile);
 
         if (ImGui::Button("Reset"))
@@ -899,11 +961,11 @@ void App::renderUI()
         ImGui::End();
     }
 
-    // Compute Shader
+        // Compute Shader
     if (showComputeEditor)
     {
-        ImGui::SetNextWindowSize(ImVec2(500, 500), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowPos(ImVec2(730, 60), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(600, 700), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(1030, 60), ImGuiCond_FirstUseEver);
 
         ImGui::Begin("Compute Shader", &showComputeEditor);
 
@@ -912,10 +974,8 @@ void App::renderUI()
 
         bool prevParticleMode = useParticleMode;
         ImGui::Checkbox("Particle rendering", &useParticleMode);
-        ImGui::TextWrapped("Particle mode uses the current vertex/fragment shader to draw points from the SSBO.\n"
-                         "Vertex shader inputs should match the particle buffer layout at locations 0, 1, 2, and 3.");
-        ImGui::TextWrapped("Optional compute shader sections: use 'init #version' for one-time setup and 'update #version' for per-frame updates.");
-
+        ImGui::TextWrapped("Particle mode uses the current vertex/fragment shader to draw points from the SSBO.");
+        
         if (useComputeShader != prevUse)
         {
             if (useComputeShader)
@@ -936,13 +996,16 @@ void App::renderUI()
             compileShader(true);
         }
 
-        static char computeBuf[16384];
-        strcpy(computeBuf, computeCode.c_str());
+        static char computeBuf[1048576]; // 1MB buffer
+        strncpy(computeBuf, computeCode.c_str(), sizeof(computeBuf) - 1);
+        computeBuf[sizeof(computeBuf) - 1] = '\0';
 
-        if (ImGui::InputTextMultiline("##c", computeBuf, sizeof(computeBuf), ImVec2(-1, -1)))
+        float footerHeight = ImGui::GetFrameHeightWithSpacing() * 6.5f;
+        if (ImGui::InputTextMultiline("##c", computeBuf, sizeof(computeBuf), ImVec2(-FLT_MIN, -footerHeight), ImGuiInputTextFlags_AllowTabInput))
             computeCode = computeBuf;
 
-                if (ImGui::Button("Compile Compute"))
+        if (ImGui::Button("Compile Compute"))
+
             compileComputeShader();
 
         if (computeCode.find("gateVoltage") != std::string::npos ||

@@ -71,9 +71,9 @@ private:
     void createFBO(GLuint& fbo, GLuint& tex);
     void destroyFBO(GLuint& fbo, GLuint& tex);
     void handleResize();
-    static std::filesystem::path getExecutableDirectory();
+        static std::filesystem::path getExecutableDirectory();
     void requestShutdown();
-
+    void toggleFullscreen();
 
     // GLFW
     GLFWwindow* window;
@@ -82,6 +82,12 @@ private:
     int pendingWidth;
     int pendingHeight;
     bool pendingResize;
+
+    // Window state for toggling
+    int prevWindowX, prevWindowY;
+    int prevWindowWidth, prevWindowHeight;
+    bool isFullscreen;
+
 
     // Shader
     Shader shader;

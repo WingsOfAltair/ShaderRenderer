@@ -144,7 +144,7 @@ void ShaderEditor::render(const char* title, ImVec2 size, std::string& code,
     }
     
     // Render actual editable text with syntax highlighting overlay
-    static char textBuf[65536] = "";
+    static char textBuf[1048576] = "";
     if (ImGui::IsWindowAppearing()) {
         strncpy(textBuf, code.c_str(), sizeof(textBuf) - 1);
         textBuf[sizeof(textBuf) - 1] = '\0';
