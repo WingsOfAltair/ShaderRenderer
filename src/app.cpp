@@ -2389,17 +2389,24 @@ void App::renderScene()
             needsPingPongInit = true;
         }
 
-        bool isMoving = isPlaying || isFastForwarding || isRewinding;
-
-        if (isMoving && simulationTime > internalSimTime)
+        // The Iterative Engine (sub-stepping) catches up internalSimTime to simulationTime.
+        // We run this regardless of 'isPlaying' so that manual scrubbing works.
+        if (simulationTime > internalSimTime)
         {
             float stepSize = 0.016f; 
-            int maxStepsPerFrame = (simulationSpeed > 100.0f) ? 20 : 1;
-            if (simulationSpeed > 300.0f) maxStepsPerFrame = 60;
             
-            // If the jump is massive (manual scrub), cap steps but move internalSimTime
-            if (simulationTime - internalSimTime > 1.0f) {
-                internalSimTime = simulationTime - 0.5f;
+            // Determine how many steps to perform this frame.
+            // If the user is just playing, we use a cap based on speed.
+            // If the user is scrubbing (jump is large), we allow more steps or jump the clock.
+            int maxStepsPerFrame = (simulationSpeed > 100.0f) ? 40 : 10;
+            if (simulationSpeed > 300.0f) maxStepsPerFrame = 100;
+            
+            // Jump logic: If we are way behind (e.g. manual scrub), 
+            // don't try to simulate the entire history if it would hang.
+            if (simulationTime - internalSimTime > 2.0f) {
+                // If jump is more than 2 seconds, move internal clock closer
+                // to start the catch-up from a reasonable offset.
+                internalSimTime = simulationTime - 1.0f;
             }
 
             int stepsPerformed = 0;
