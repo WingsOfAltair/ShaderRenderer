@@ -2376,59 +2376,75 @@ void App::renderScene()
         renderOk = renderOk && computeValid;
     }
 
-    // --- High Speed Simulation Catch-up ---
-    // If we are significantly behind simulationTime, run multiple steps
-    if (renderOk && useComputeShader && isPlaying && simulationTime > internalSimTime)
+        // --- High Speed Simulation Catch-up ---
+    // Only run the iterative sub-stepping engine for texture simulations (MOSFET, Game of Life)
+    // Particle simulations (N-Body) should use the standard single-pass logic below.
+    if (renderOk && useComputeShader && useIterativeEngine)
     {
-        float stepSize = 0.016f; // Standard 60fps step
-        int maxStepsPerFrame = (simulationSpeed > 100.0f) ? 20 : 1;
-        
-        // At 400x speed, we need to do many steps to make it look fast
-        if (simulationSpeed > 300.0f) maxStepsPerFrame = 60;
-
-        int stepsPerformed = 0;
-        while (internalSimTime < simulationTime && stepsPerformed < maxStepsPerFrame)
+        // Handle Rewind/Reset for iterative engine
+        if (simulationTime < internalSimTime)
         {
-            // Execute the compute logic (this is a simplified version of the logic below)
-            if (usePingPong)
-            {
-                 if (needsPingPongInit || (useDualComputeShader && needInitDispatch))
-                {
-                    if (useR8UIPingPong) seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
-                    else if (useDualComputeShader && initComputeValid)
-                    {
-                        initComputeShader.use();
-                        initComputeShader.setFloat("uTime", internalSimTime);
-                        initComputeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                        initComputeShader.setFloat("gateVoltage", gateVoltage);
-                        glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, useR8UIPingPong ? GL_R8UI : GL_RGBA32F);
-                        glDispatchCompute(((GLuint)windowWidth + 15) / 16, ((GLuint)windowHeight + 15) / 16, 1);
-                        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-                    }
-                    needsPingPongInit = false;
-                    needInitDispatch = false;
-                }
+            internalSimTime = 0.0f;
+            needInitDispatch = true;
+            needsPingPongInit = true;
+        }
 
-                computeShader.use();
-                computeShader.setFloat("uTime", internalSimTime);
-                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                computeShader.setFloat("dt", stepSize);
-                computeShader.setFloat("gateVoltage", gateVoltage);
-                computeShader.setFloat("time", internalSimTime);
+        bool isMoving = isPlaying || isFastForwarding || isRewinding;
 
-                GLenum format = useR8UIPingPong ? GL_R8UI : GL_RGBA32F;
-                glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  format);
-                glBindImageTexture(1, pingPongWriteTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, format);
-
-                int lx = parseLocalSize(computeCode, "x", 16);
-                int ly = parseLocalSize(computeCode, "y", 16);
-                glDispatchCompute(((GLuint)windowWidth + lx - 1) / lx, ((GLuint)windowHeight + ly - 1) / ly, 1);
-                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-                std::swap(pingPongReadTex, pingPongWriteTex);
-            }
+        if (isMoving && simulationTime > internalSimTime)
+        {
+            float stepSize = 0.016f; 
+            int maxStepsPerFrame = (simulationSpeed > 100.0f) ? 20 : 1;
+            if (simulationSpeed > 300.0f) maxStepsPerFrame = 60;
             
-            internalSimTime += stepSize;
-            stepsPerformed++;
+            // If the jump is massive (manual scrub), cap steps but move internalSimTime
+            if (simulationTime - internalSimTime > 1.0f) {
+                internalSimTime = simulationTime - 0.5f;
+            }
+
+            int stepsPerformed = 0;
+            while (internalSimTime < simulationTime && stepsPerformed < maxStepsPerFrame)
+            {
+                if (usePingPong)
+                {
+                     if (needsPingPongInit || (useDualComputeShader && needInitDispatch))
+                    {
+                        if (useR8UIPingPong) seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
+                        else if (useDualComputeShader && initComputeValid)
+                        {
+                            initComputeShader.use();
+                            initComputeShader.setFloat("uTime", internalSimTime);
+                            initComputeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                            initComputeShader.setFloat("gateVoltage", gateVoltage);
+                            glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, useR8UIPingPong ? GL_R8UI : GL_RGBA32F);
+                            glDispatchCompute(((GLuint)windowWidth + 15) / 16, ((GLuint)windowHeight + 15) / 16, 1);
+                            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                        }
+                        needsPingPongInit = false;
+                        needInitDispatch = false;
+                    }
+
+                    computeShader.use();
+                    computeShader.setFloat("uTime", internalSimTime);
+                    computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                    computeShader.setFloat("dt", stepSize);
+                    computeShader.setFloat("gateVoltage", gateVoltage);
+                    computeShader.setFloat("time", internalSimTime);
+
+                    GLenum format = useR8UIPingPong ? GL_R8UI : GL_RGBA32F;
+                    glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  format);
+                    glBindImageTexture(1, pingPongWriteTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, format);
+
+                    int lx = parseLocalSize(computeCode, "x", 16);
+                    int ly = parseLocalSize(computeCode, "y", 16);
+                    glDispatchCompute(((GLuint)windowWidth + lx - 1) / lx, ((GLuint)windowHeight + ly - 1) / ly, 1);
+                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                    std::swap(pingPongReadTex, pingPongWriteTex);
+                }
+                
+                internalSimTime += stepSize;
+                stepsPerformed++;
+            }
         }
     }
 
