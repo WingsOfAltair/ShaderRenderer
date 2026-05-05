@@ -26,11 +26,11 @@ const char* App::defaultVertexShader = R"(
 
 layout(location = 0) in vec2 aPos;
 
-out vec2 TexCoord;
+out vec2 uv;
 
 void main()
 {
-    TexCoord = aPos * 0.5 + 0.5; // convert -1..1 → 0..1
+    uv = aPos * 0.5 + 0.5; // convert -1..1 → 0..1
     gl_Position = vec4(aPos, 0.0, 1.0);
 }
 )";
@@ -180,11 +180,12 @@ App::App()
     : window(nullptr), windowWidth(1280), windowHeight(720), pendingWidth(1280), pendingHeight(720), pendingResize(false),
       shaderValid(false), computeValid(false), initComputeValid(false), useComputeShader(false), useParticleMode(false),
       useDualComputeShader(false), needInitDispatch(false), particleHasForce(true),
-      computeTexture(0),
+            computeTexture(0),
       pingPongTexA(0), pingPongTexB(0), pingPongReadTex(0), pingPongWriteTex(0),
-      usePingPong(false), needsPingPongInit(true),
-      particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
-        time(0.0f), simulationTime(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
+      usePingPong(false), useR8UIPingPong(false), needsPingPongInit(true),
+      gateVoltage(0.5f),
+            particleVAO(0), particleBufferA(0), particleBufferB(0), particleReadBuffer(0), particleWriteBuffer(0), particleCount(0),
+        time(0.0f), simulationTime(0.0f), lastSimulationTime(0.0f), internalSimTime(0.0f), lastFrameTime(0.0f), frameCount(0), fps(0.0f), simulationSpeed(1.0f), computeDt(0.016f),
         isPlaying(true), animationDuration(60.0f), loopAnimation(true), fastForwardRate(5.0f),
       isFastForwarding(false), isRewinding(false), showPlaybackBar(true), resetTimeOnCompile(false), useLogoAsChannel0(false),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
@@ -585,40 +586,43 @@ void App::run()
 
                 time += deltaTime;
 
-        // --- Advance simulation time according to playback state ---
-        // isFastForwarding / isRewinding are written by renderPlaybackBar() last frame
-        // and reset inside renderPlaybackBar() each frame before button checks.
-        if (isPlaying || isFastForwarding || isRewinding)
-        {
-            float effectiveSpeed = simulationSpeed;
-            if (isFastForwarding) effectiveSpeed *= fastForwardRate;
-            if (isRewinding)      effectiveSpeed *= -fastForwardRate;
+                // --- Advance simulation time according to playback state ---
+                lastSimulationTime = simulationTime;
 
-            float advance  = deltaTime * effectiveSpeed;
-            simulationTime += advance;
-            computeDt      = advance;
-
-            if (loopAnimation)
-            {
-                if (simulationTime >= animationDuration)
-                    simulationTime = fmodf(simulationTime, animationDuration);
-                else if (simulationTime < 0.0f)
-                    simulationTime = animationDuration + fmodf(simulationTime, animationDuration);
-            }
-            else
-            {
-                if (simulationTime >= animationDuration)
+                if (isPlaying || isFastForwarding || isRewinding)
                 {
-                    simulationTime = animationDuration;
-                    isPlaying      = false;
+                    float effectiveSpeed = simulationSpeed;
+                    if (isFastForwarding) effectiveSpeed *= fastForwardRate;
+                    if (isRewinding)      effectiveSpeed *= -fastForwardRate;
+
+                    float advance  = deltaTime * effectiveSpeed;
+                    simulationTime += advance;
+
+                    if (loopAnimation)
+                    {
+                        if (simulationTime >= animationDuration)
+                            simulationTime = fmodf(simulationTime, animationDuration);
+                        else if (simulationTime < 0.0f)
+                            simulationTime = animationDuration + fmodf(simulationTime, animationDuration);
+                    }
+                    else
+                    {
+                        if (simulationTime >= animationDuration)
+                        {
+                            simulationTime = animationDuration;
+                            isPlaying      = false;
+                        }
+                        simulationTime = std::max(simulationTime, 0.0f);
+                    }
+
+                    // computeDt should reflect the intended step size for this frame.
+                    // It drives the particle engine (N-Body).
+                    computeDt = advance;
                 }
-                simulationTime = std::max(simulationTime, 0.0f);
-            }
-        }
-        else
-        {
-            computeDt = 0.0f;
-        }
+                else
+                {
+                    computeDt = 0.0f;
+                }
 
         // -------------------------
         // UI
@@ -730,7 +734,7 @@ void App::renderUI()
             ImGui::EndMenu();
         }
 
-                if (ImGui::BeginMenu("View"))
+        if (ImGui::BeginMenu("View"))
         {
             ImGui::MenuItem("Help", nullptr, &showHelp);
             ImGui::MenuItem("Vertex Shader", nullptr, &showVertexEditor);
@@ -933,8 +937,15 @@ void App::renderUI()
         if (ImGui::InputTextMultiline("##c", computeBuf, sizeof(computeBuf), ImVec2(-1, -1)))
             computeCode = computeBuf;
 
-        if (ImGui::Button("Compile Compute"))
+                if (ImGui::Button("Compile Compute"))
             compileComputeShader();
+
+        if (computeCode.find("gateVoltage") != std::string::npos ||
+            fragmentCode.find("gateVoltage") != std::string::npos ||
+            vertexCode.find("gateVoltage") != std::string::npos)
+        {
+            ImGui::SliderFloat("Gate Voltage", &gateVoltage, 0.0f, 5.0f);
+        }
 
         ImGui::SameLine();
         if (ImGui::Button("Reset"))
@@ -1337,21 +1348,42 @@ bool App::compileComputeShader(bool showPopup)
         particleWriteBuffer = particleReadBuffer;
     }
 
-    // Detect r8ui image ping-pong mode (e.g. Game of Life)
-    bool needsR8UI = computeSourceUsesR8UI(sources.initSource + sources.updateSource);
-    if (needsR8UI != usePingPong)
-    {
-        usePingPong = needsR8UI;
-        // Tear down whichever texture type is no longer needed
-        if (computeTexture) { glDeleteTextures(1, &computeTexture); computeTexture = 0; }
-        destroyPingPongTextures();
-        if (usePingPong)
-            createPingPongTextures(windowWidth, windowHeight);
-        else
-            createComputeTexture(windowWidth, windowHeight);
-    }
-    if (usePingPong)
-        needsPingPongInit = true;
+        // Detected compute types
+        bool isParticleSimulation = useParticleMode;
+        bool needsR8UI = computeSourceUsesR8UI(sources.initSource + sources.updateSource);
+        bool usesBinding1 = computeSourceUsesWriteBinding1(sources.initSource + sources.updateSource);
+        bool hasInitBlock = !sources.initSource.empty();
+    
+        // The MOSFET and texture-based simulations need the IterativeEngine (sub-stepping).
+        // We detect this if we have binding 1 but we are NOT in particle mode.
+        useIterativeEngine = (usesBinding1 || hasInitBlock) && !isParticleSimulation;
+
+        // usePingPong is a flag used in renderScene to decide which dispatch logic to use.
+        // It should be true for both MOSFET (textures) and N-Body (SSBOs) if they have binding 1.
+        if (usesBinding1 != usePingPong || needsR8UI != useR8UIPingPong)
+        {
+            usePingPong = usesBinding1;
+            useR8UIPingPong = needsR8UI;
+
+            if (useIterativeEngine) internalSimTime = 0.0f;
+        
+            // Only manage textures if we ARE NOT in particle mode.
+            // N-Body manages its own particleReadBuffer/particleWriteBuffer.
+            if (!isParticleSimulation)
+            {
+                if (computeTexture) { glDeleteTextures(1, &computeTexture); computeTexture = 0; }
+                destroyPingPongTextures();
+
+                if (usePingPong)
+                    createPingPongTextures(windowWidth, windowHeight);
+                else
+                    createComputeTexture(windowWidth, windowHeight);
+            }
+        }
+        if (usePingPong && !isParticleSimulation)
+            needsPingPongInit = true;
+        else if (isParticleSimulation)
+            needsPingPongInit = false;
 
     if (!combined.vertexSource.empty() && !combined.fragmentSource.empty())
     {
@@ -1455,12 +1487,14 @@ void App::createComputeTexture(int width, int height)
     {
         createPingPongTextures(w, h);
 
-        // 🔥 FIX: always reset + seed AFTER creation
         pingPongReadTex = pingPongTexA;
         pingPongWriteTex = pingPongTexB;
 
-        seedPingPongTexture(pingPongReadTex, w, h);
-        seedPingPongTexture(pingPongWriteTex, w, h);
+        if (useR8UIPingPong)
+        {
+            seedPingPongTexture(pingPongReadTex, w, h);
+            seedPingPongTexture(pingPongWriteTex, w, h);
+        }
 
         forceRecompute = true;
         needsPingPongInit = false;
@@ -1517,8 +1551,30 @@ void App::createPingPongTextures(int width, int height)
         return tex;
     };
 
-    pingPongTexA   = makeR8UI(width, height);
-    pingPongTexB   = makeR8UI(width, height);
+    auto makeRGBA32F = [](int w, int h) -> GLuint {
+        GLuint tex;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return tex;
+    };
+
+    if (useR8UIPingPong)
+    {
+        pingPongTexA = makeR8UI(width, height);
+        pingPongTexB = makeR8UI(width, height);
+    }
+    else
+    {
+        pingPongTexA = makeRGBA32F(width, height);
+        pingPongTexB = makeRGBA32F(width, height);
+    }
+
     pingPongReadTex  = pingPongTexA;
     pingPongWriteTex = pingPongTexB;
 }
@@ -2314,10 +2370,66 @@ void App::renderScene()
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    bool renderOk = shaderValid;
+        bool renderOk = shaderValid;
     if (useComputeShader)
     {
         renderOk = renderOk && computeValid;
+    }
+
+    // --- High Speed Simulation Catch-up ---
+    // If we are significantly behind simulationTime, run multiple steps
+    if (renderOk && useComputeShader && isPlaying && simulationTime > internalSimTime)
+    {
+        float stepSize = 0.016f; // Standard 60fps step
+        int maxStepsPerFrame = (simulationSpeed > 100.0f) ? 20 : 1;
+        
+        // At 400x speed, we need to do many steps to make it look fast
+        if (simulationSpeed > 300.0f) maxStepsPerFrame = 60;
+
+        int stepsPerformed = 0;
+        while (internalSimTime < simulationTime && stepsPerformed < maxStepsPerFrame)
+        {
+            // Execute the compute logic (this is a simplified version of the logic below)
+            if (usePingPong)
+            {
+                 if (needsPingPongInit || (useDualComputeShader && needInitDispatch))
+                {
+                    if (useR8UIPingPong) seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
+                    else if (useDualComputeShader && initComputeValid)
+                    {
+                        initComputeShader.use();
+                        initComputeShader.setFloat("uTime", internalSimTime);
+                        initComputeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                        initComputeShader.setFloat("gateVoltage", gateVoltage);
+                        glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, useR8UIPingPong ? GL_R8UI : GL_RGBA32F);
+                        glDispatchCompute(((GLuint)windowWidth + 15) / 16, ((GLuint)windowHeight + 15) / 16, 1);
+                        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                    }
+                    needsPingPongInit = false;
+                    needInitDispatch = false;
+                }
+
+                computeShader.use();
+                computeShader.setFloat("uTime", internalSimTime);
+                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                computeShader.setFloat("dt", stepSize);
+                computeShader.setFloat("gateVoltage", gateVoltage);
+                computeShader.setFloat("time", internalSimTime);
+
+                GLenum format = useR8UIPingPong ? GL_R8UI : GL_RGBA32F;
+                glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  format);
+                glBindImageTexture(1, pingPongWriteTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, format);
+
+                int lx = parseLocalSize(computeCode, "x", 16);
+                int ly = parseLocalSize(computeCode, "y", 16);
+                glDispatchCompute(((GLuint)windowWidth + lx - 1) / lx, ((GLuint)windowHeight + ly - 1) / ly, 1);
+                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                std::swap(pingPongReadTex, pingPongWriteTex);
+            }
+            
+            internalSimTime += stepSize;
+            stepsPerformed++;
+        }
     }
 
     if (useParticleMode)
@@ -2347,26 +2459,31 @@ void App::renderScene()
                     needInitDispatch = false;
                 }
 
-                {
-                    int updateInvocationCount = getComputeShaderLocalInvocationCount(splitCombinedShaderSources(computeCode).computeSources.updateSource);
-                    int updateDispatchCount = (particleCount + updateInvocationCount - 1) / updateInvocationCount;
+                    {
+                        int updateInvocationCount = getComputeShaderLocalInvocationCount(splitCombinedShaderSources(computeCode).computeSources.updateSource);
+                        int updateDispatchCount = (particleCount + updateInvocationCount - 1) / updateInvocationCount;
 
-                    computeShader.use();
-                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
-                    GLuint writeBuffer = particleWriteBuffer ? particleWriteBuffer : particleReadBuffer;
-                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, writeBuffer);
-                    computeShader.setFloat("uTime", simulationTime);
-                    computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                    computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
-                    computeShader.setFloat("gravityIntensity", 1.0f);
-                    computeShader.setFloat("k", 0.1f);
-                    computeShader.setInt("increaseK", 0);
-                    computeShader.setFloat("dt", computeDt);
-                    glDispatchCompute((GLuint)updateDispatchCount, 1, 1);
-                    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
-                    if (particleWriteBuffer && particleWriteBuffer != particleReadBuffer)
-                        std::swap(particleReadBuffer, particleWriteBuffer);
-                }
+                        computeShader.use();
+                        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
+                        GLuint writeBuffer = particleWriteBuffer ? particleWriteBuffer : particleReadBuffer;
+                        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, writeBuffer);
+                        computeShader.setFloat("uTime", simulationTime);
+                        computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                        computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
+                        computeShader.setFloat("gravityIntensity", 1.0f);
+                        computeShader.setFloat("k", 0.1f);
+                        computeShader.setInt("increaseK", 0);
+                    
+                        // N-Body should always use the current simulation frame's dt
+                        computeShader.setFloat("dt", computeDt);
+                    
+                        glDispatchCompute((GLuint)updateDispatchCount, 1, 1);
+                        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+                    
+                        bool isMoving = isPlaying || isFastForwarding || isRewinding;
+                        if (particleWriteBuffer && particleWriteBuffer != particleReadBuffer && isMoving)
+                            std::swap(particleReadBuffer, particleWriteBuffer);
+                    }
 
                 GLenum err = glGetError();
                 if (err != GL_NO_ERROR)
@@ -2419,64 +2536,27 @@ void App::renderScene()
         {
             if (usePingPong)
             {
-                // ---- r8ui ping-pong path (e.g. Game of Life) ----
+                // ---- Generic ping-pong path (r8ui or rgba32f) ----
+                // Note: The main simulation loop above now handles the high-speed steps.
+                // This section now only handles the render pass setup.
 
-                // Seed the read texture once on first frame / after recompile
-                if (needsPingPongInit && pingPongReadTex)
-                {
-                    if (pingPongReadTex)
-                        seedPingPongTexture(pingPongReadTex, windowWidth, windowHeight);
-
-                    if (pingPongWriteTex)
-                        seedPingPongTexture(pingPongWriteTex, windowWidth, windowHeight);
-                    needsPingPongInit = false;
-                }
-
-                // Compute pass
-                CombinedShaderSources combined = splitCombinedShaderSources(computeCode);
-                std::string& updateSrc = combined.computeSources.updateSource;
-                int lx = parseLocalSize(updateSrc, "x", 8);
-                int ly = parseLocalSize(updateSrc, "y", 8);
-
-                computeShader.use();
-                computeShader.setFloat("uTime", simulationTime);
-                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                if (!pingPongReadTex || !pingPongWriteTex)
-                {
-                    std::cerr << "Ping-pong textures invalid during resize or compile; skipping compute pass.\n";
-                }
-                else
-                {
-                    glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  GL_R8UI);
-                    glBindImageTexture(1, pingPongWriteTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8UI);
-                    glDispatchCompute(
-                        ((GLuint)windowWidth  + lx - 1) / lx,
-                        ((GLuint)windowHeight + ly - 1) / ly,
-                        1
-                    );
-                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
-                    std::swap(pingPongReadTex, pingPongWriteTex);
-                }
-
-                GLenum err = glGetError();
-                if (err != GL_NO_ERROR)
-                    std::cerr << "GL ERROR after ping-pong compute: " << err << std::endl;
-
-                // Render pass — user's own fragment shader reads the image directly
+                // Render pass
                 shader.use();
-                if (!pingPongReadTex)
-                {
-                    std::cerr << "Ping-pong read texture invalid during render pass; skipping draw.\n";
-                }
-                else
+                if (useR8UIPingPong)
                 {
                     glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
+                    shader.setVec2("resolution", (float)windowWidth, (float)windowHeight);
                 }
-                shader.setVec2("resolution", (float)windowWidth, (float)windowHeight);
-                shader.setVec2("offset",     0.0f, 0.0f);
-                shader.setFloat("scale",     1.0f);
+                else
+                {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, pingPongReadTex);
+                    shader.setInt("densityTex", 0);
+                    shader.setInt("iChannel0", 0);
+                }
                 shader.setFloat("uTime",     simulationTime);
                 shader.setFloat("dt", computeDt);
+                shader.setFloat("gateVoltage", gateVoltage);
             }
             else
             {

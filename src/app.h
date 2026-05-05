@@ -109,8 +109,11 @@ private:
     GLuint pingPongTexB;
     GLuint pingPongReadTex;
     GLuint pingPongWriteTex;
-    bool usePingPong;           // true when compute uses r8ui + binding 1 write
+    bool usePingPong;           // true when compute uses r8ui or rgba32f ping-pong
+    bool useR8UIPingPong;       // specifically for Game of Life style
     bool needsPingPongInit;     // true until first frame seeds random cell data
+    bool useIterativeEngine;    // true for texture-based simulations that need sub-stepping
+    float gateVoltage;          // MOSFET simulation parameter
     float pingPongAccumulator;  // fractional step accumulator for speed control
     GLuint particleVAO;
     GLuint particleBufferA;
@@ -118,10 +121,12 @@ private:
     GLuint particleReadBuffer;
     GLuint particleWriteBuffer;
         int particleCount;
-    float time;
-    float simulationTime;   // time accumulated at simulationSpeed scale — drives compute uTime
-    float lastFrameTime;
-    int frameCount;
+        float time;
+        float simulationTime;       // Playback head time
+        float lastSimulationTime;   // To detect rewinding/scrubbing
+        float internalSimTime;     // Current time reached by the simulation state
+        float lastFrameTime;
+        int frameCount;
     float fps;
     float simulationSpeed;
     float computeDt;
