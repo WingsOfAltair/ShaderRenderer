@@ -30,6 +30,8 @@ private:
     unsigned int fragmentShader;
     unsigned int computeShader;
     mutable std::unordered_map<std::string, int> uniformCache;
+    mutable std::unordered_map<std::string, unsigned int> activeUniformsCache;
+    mutable bool activeUniformsCached = false;
 
     void checkCompileErrors(unsigned int shader, const std::string& type);
     int getUniformLocationCached(const std::string& name) const;

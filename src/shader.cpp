@@ -23,6 +23,8 @@ bool Shader::compile(const std::string& vertexSrc, const std::string& fragmentSr
         programID = 0;
     }
     uniformCache.clear();
+    activeUniformsCache.clear();
+    activeUniformsCached = false;
 
     if (computeShader) {
         glDeleteShader(computeShader);
@@ -95,12 +97,14 @@ bool Shader::compileCompute(const std::string& source, std::string& errorOut)
     errorOut.clear();
 
     // Cleanup old program
-    if (programID)
-    {
+    if (programID) {
         glDeleteProgram(programID);
         programID = 0;
     }
     uniformCache.clear();
+    activeUniformsCache.clear();
+    activeUniformsCached = false;
+
 
     // ============================
     // CREATE SHADER
@@ -224,8 +228,10 @@ int Shader::getUniformLocationCached(const std::string& name) const
 
 std::unordered_map<std::string, unsigned int> Shader::getActiveUniforms() const
 {
-    std::unordered_map<std::string, unsigned int> uniforms;
-    if (!programID) return uniforms;
+    if (activeUniformsCached) return activeUniformsCache;
+
+    activeUniformsCache.clear();
+    if (!programID) return activeUniformsCache;
 
     GLint count;
     glGetProgramiv(programID, GL_ACTIVE_UNIFORMS, &count);
@@ -236,9 +242,10 @@ std::unordered_map<std::string, unsigned int> Shader::getActiveUniforms() const
         GLint size;
         GLenum type;
         glGetActiveUniform(programID, i, sizeof(name), &length, &size, &type, name);
-        uniforms[std::string(name)] = (unsigned int)type;
+        activeUniformsCache[std::string(name)] = (unsigned int)type;
     }
-    return uniforms;
+    activeUniformsCached = true;
+    return activeUniformsCache;
 }
 
 

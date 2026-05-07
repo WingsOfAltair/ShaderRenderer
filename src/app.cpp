@@ -2602,14 +2602,18 @@ void App::renderScene()
         renderOk = renderOk && computeValid;
     }
 
-            // --- High Speed Simulation Catch-up ---
+    // --- High Speed Simulation Catch-up ---
     // Only run the iterative sub-stepping engine for texture simulations (MOSFET, Game of Life)
     // Particle simulations (N-Body) should use the standard single-pass logic below.
     if (renderOk && useComputeShader && useIterativeEngine)
     {
+        // Detect if we are scrubbing, rewinding, or if a large jump happened.
+        // We use lastSimulationTime to detect if the user moved the playhead backwards.
+        bool isBackwards = (simulationTime < lastSimulationTime - 0.001f);
+        bool isScrubbing = !isPlaying || isFastForwarding || isRewinding;
+
         // Handle Rewind/Reset for iterative engine
-        // Threshold adjusted to avoid false-positive resets when playback time is slightly behind internal clock
-        if (simulationTime < internalSimTime - 0.1f)
+        if (isBackwards)
         {
             internalSimTime = 0.0f;
             needInitDispatch = true;
@@ -2620,18 +2624,18 @@ void App::renderScene()
         {
             // Use a fixed step size for iterative engine.
             const float stepSize = 0.016f; 
-            
-            // Limit steps per frame to avoid freezing if simulation is very far behind.
-            int maxStepsPerFrame = (simulationSpeed > 100.0f) ? 40 : 10;
-            if (simulationSpeed > 300.0f) maxStepsPerFrame = 100;
-            
-            // Jump logic: If we are way behind, move internal clock closer.
-            if (simulationTime - internalSimTime > 1.0f) {
-                internalSimTime = simulationTime - 0.5f;
-            }
+        
+            // For stateful simulations, we need to reach the target time to maintain visual consistency.
+            // When scrubbing (not playing) or during a large jump, we use a much higher step limit
+            // to catch up instantly without showing intermediate 're-charging' states.
+            // 5000 steps covers up to 80 seconds of simulation time in one frame.
+            int maxStepsPerFrame = isScrubbing ? 5000 : (int)(simulationSpeed * 4.0f + 20);
+            maxStepsPerFrame = std::clamp(maxStepsPerFrame, 1, 10000);
 
             int stepsPerformed = 0;
             while (internalSimTime < simulationTime && stepsPerformed < maxStepsPerFrame)
+
+
             {
                 if (usePingPong)
                 {
@@ -2778,12 +2782,15 @@ void App::renderScene()
                 // Note: The main simulation loop above now handles the high-speed steps.
                 // This section now only handles the render pass setup.
 
-                // Render pass
+                                // Render pass
                 shader.use();
+                
+                float timeToUse = useIterativeEngine ? internalSimTime : simulationTime;
+
                 if (useR8UIPingPong)
                 {
                     glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
-                    autoSetUniforms(shader, simulationTime, computeDt);
+                    autoSetUniforms(shader, timeToUse, computeDt);
 
                     // Re-add fallback uniforms for CA shaders (offset/scale) if not present in GUI
                     if (dynamicUniforms.find("offset") == dynamicUniforms.end()) shader.setVec2("offset", 0.0f, 0.0f);
@@ -2793,8 +2800,9 @@ void App::renderScene()
                 {
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, pingPongReadTex);
-                    autoSetUniforms(shader, simulationTime, computeDt);
+                    autoSetUniforms(shader, timeToUse, computeDt);
                 }
+
 
 
 
