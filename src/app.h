@@ -119,7 +119,7 @@ private:
     bool usePingPong;           // true when compute uses r8ui or rgba32f ping-pong
     bool useR8UIPingPong;       // specifically for Game of Life style
     bool needsPingPongInit;     // true until first frame seeds random cell data
-        bool useIterativeEngine;    // true for texture-based simulations that need sub-stepping
+    bool useIterativeEngine;    // true for texture-based simulations that need sub-stepping
     std::map<std::string, float> dynamicUniforms; // Dynamic float uniforms detected in shader
     float pingPongAccumulator;  // fractional step accumulator for speed control
     GLuint particleVAO;
@@ -127,18 +127,20 @@ private:
     GLuint particleBufferB;
     GLuint particleReadBuffer;
     GLuint particleWriteBuffer;
-        int particleCount;
-        float time;
-        float simulationTime;       // Playback head time
-        float lastSimulationTime;   // To detect rewinding/scrubbing
-        float internalSimTime;     // Current time reached by the simulation state
-        float lastFrameTime;
-        int frameCount;
+    int particleCount;
+    float time;
+    float simulationTime;       // Playback head time
+    float lastSimulationTime;   // To detect rewinding/scrubbing
+    float internalSimTime;     // Current time reached by the simulation state
+    float lastFrameTime;
+    int frameCount;
     float fps;
+    int targetFPS;
+    bool vsyncEnabled;
     float simulationSpeed;
     float computeDt;
 
-        // Playback controls
+    // Playback controls
     bool  isPlaying;
     float animationDuration;
     bool  loopAnimation;

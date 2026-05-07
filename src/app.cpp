@@ -191,8 +191,9 @@ App::App()
       isFastForwarding(false), isRewinding(false), showPlaybackBar(true), resetTimeOnCompile(false), useLogoAsChannel0(false),
       showHelp(false), showSavedShaders(true), showVertexEditor(true), showFragmentEditor(true), showComputeEditor(true),
       
-      hintTimer(0.0f), showHint(false),
+        hintTimer(0.0f), showHint(false),
       showCompileErrorPopup(false), compileErrorPopupMessage(""), compileErrorPopupTimer(0.0f),
+      targetFPS(60), vsyncEnabled(true),
       VAO(0), VBO(0), selectedPreset(""), newPresetName(""), errorTexture(0)
 {
 }
@@ -592,8 +593,13 @@ void App::toggleFullscreen()
 
 void App::run()
 {
+    double lastFPSTime = glfwGetTime();
+    int frameCounter = 0;
+
     while (!glfwWindowShouldClose(window))
     {
+        double frameStartTime = glfwGetTime();
+
         glfwPollEvents();
 
         if (pendingResize)
@@ -634,6 +640,15 @@ void App::run()
             deltaTime = 0.016f;
         if (deltaTime > 0.1f)
             deltaTime = 0.1f;
+
+        // Calculate FPS
+        frameCounter++;
+        if (currentTime - lastFPSTime >= 1.0)
+        {
+            fps = (float)frameCounter / (float)(currentTime - lastFPSTime);
+            frameCounter = 0;
+            lastFPSTime = currentTime;
+        }
 
                 time += deltaTime;
 
@@ -694,6 +709,21 @@ void App::run()
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
+
+        // FPS Capping
+        if (!vsyncEnabled && targetFPS > 0)
+        {
+            double targetFrameTime = 1.0 / (double)targetFPS;
+            while (glfwGetTime() - frameStartTime < targetFrameTime)
+            {
+                // Busy wait for precision
+#ifdef _WIN32
+                Sleep(0);
+#else
+                usleep(0);
+#endif
+            }
+        }
     }
     shutdown();
 }
@@ -2471,6 +2501,24 @@ void App::renderPlaybackBar()
     ImGui::SetNextItemWidth(80.0f);
     ImGui::SliderFloat("Fast-Forward Rate##ffrate", &fastForwardRate, 2.0f, 32.0f, "FF %.0fx");
     ImGui::SetItemTooltip("Fast-forward / rewind multiplier");
+
+    ImGui::SameLine(0.0f, 24.0f);
+    if (ImGui::Checkbox("VSync", &vsyncEnabled))
+    {
+        glfwSwapInterval(vsyncEnabled ? 1 : 0);
+    }
+    ImGui::SetItemTooltip("Toggle Vertical Sync");
+
+    if (!vsyncEnabled)
+    {
+        ImGui::SameLine(0.0f, 16.0f);
+        ImGui::SetNextItemWidth(100.0f);
+        ImGui::SliderInt("FPS Cap", &targetFPS, 1, 240);
+        ImGui::SetItemTooltip("Target Frames Per Second (only when VSync is OFF)");
+    }
+
+    ImGui::SameLine(0.0f, 16.0f);
+    ImGui::Text("FPS: %.1f", fps);
 
     ImGui::End();
 
