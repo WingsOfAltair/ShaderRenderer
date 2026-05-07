@@ -1349,16 +1349,17 @@ CombinedShaderSources App::splitCombinedShaderSources(const std::string& source)
         pos = nextVersion;
     }
 
-    auto classify = [&](const std::string& text) {
+        auto classify = [&](const std::string& text) {
         std::string lowerText = toLowerCopy(text);
         if (lowerText.find("local_size_") != std::string::npos || lowerText.find("gl_globalinvocationid") != std::string::npos)
             return 0;
-        if (lowerText.find("gl_position") != std::string::npos || lowerText.find("layout(location = 0) in") != std::string::npos || lowerText.find("gl_pervertex") != std::string::npos)
+        if (lowerText.find("gl_position") != std::string::npos || lowerText.find("vposition") != std::string::npos || lowerText.find("layout(location = 0) in") != std::string::npos || lowerText.find("gl_pervertex") != std::string::npos)
             return 1;
-        if (lowerText.find("fragcolor") != std::string::npos || lowerText.find("gl_fragcolor") != std::string::npos || lowerText.find("out vec4") != std::string::npos || lowerText.find("texture(") != std::string::npos)
+        if (lowerText.find("fragcolor") != std::string::npos || lowerText.find("gl_fragcolor") != std::string::npos || lowerText.find("out vec4") != std::string::npos || lowerText.find("texture(") != std::string::npos || lowerText.find("imageload") != std::string::npos)
             return 2;
         return 3;
     };
+
 
     std::vector<BlockInfo*> computeBlocks;
     BlockInfo* initBlock = nullptr;
@@ -2555,23 +2556,34 @@ void App::autoSetUniforms(const Shader& s, float timeVal, float dtVal)
         {
             s.setVec2(name, (float)mouseX, (float)mouseY);
         }
-                // --- Delta Time Semantics ---
+        // --- Delta Time Semantics ---
         else if (name == "dt" || name == "u_delta" || name == "iTimeDelta" || name == "u_delta_time")
         {
             s.setFloat(name, dtVal);
         }
-        // --- Channel semantics (textures) ---
-        else if (name == "iChannel0" || name == "u_texture0" || name == "densityTex" || name == "uTexture" || name == "currentState" || name == "u_state")
+                // --- Channel semantics (textures) ---
+        else if (name == "iChannel0" || name == "u_texture0" || name == "densityTex" || name == "uTexture" || name == "currentState" || name == "u_state" || name == "cells")
         {
-            s.setInt(name, 0); // ActiveTexture(0)
+            s.setInt(name, 0); 
         }
-        // --- Dynamic Uniform Sliders ---
-        for (auto const& [name, value] : dynamicUniforms)
+        // --- CA/Coordinate Semantics ---
+        else if (name == "scale")
         {
-            s.setFloat(name, value);
+            if (dynamicUniforms.find("scale") == dynamicUniforms.end()) dynamicUniforms["scale"] = 1.0f;
+        }
+        else if (name == "offset")
+        {
+             if (dynamicUniforms.find("offset") == dynamicUniforms.end()) dynamicUniforms["offset"] = 0.0f;
         }
     }
+
+    // --- Dynamic Uniform Sliders ---
+    for (auto const& [name, value] : dynamicUniforms)
+    {
+        s.setFloat(name, value);
+    }
 }
+
 
 void App::renderScene()
 {
@@ -2606,15 +2618,16 @@ void App::renderScene()
 
         if (simulationTime > internalSimTime)
         {
+            // Use a fixed step size for iterative engine.
             const float stepSize = 0.016f; 
             
-            // Determine how many steps to perform this frame.
+            // Limit steps per frame to avoid freezing if simulation is very far behind.
             int maxStepsPerFrame = (simulationSpeed > 100.0f) ? 40 : 10;
             if (simulationSpeed > 300.0f) maxStepsPerFrame = 100;
             
             // Jump logic: If we are way behind, move internal clock closer.
-            if (simulationTime - internalSimTime > 2.0f) {
-                internalSimTime = simulationTime - 1.0f;
+            if (simulationTime - internalSimTime > 1.0f) {
+                internalSimTime = simulationTime - 0.5f;
             }
 
             int stepsPerformed = 0;
@@ -2642,6 +2655,8 @@ void App::renderScene()
                     autoSetUniforms(computeShader, internalSimTime, stepSize);
 
                     GLenum format = useR8UIPingPong ? GL_R8UI : GL_RGBA32F;
+                    
+                    // Bind images according to standard layout: 0 = in (read), 1 = out (write)
                     glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  format);
                     glBindImageTexture(1, pingPongWriteTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, format);
 
@@ -2649,7 +2664,6 @@ void App::renderScene()
                     int ly = parseLocalSize(computeCode, "y", 16);
                     glDispatchCompute(((GLuint)windowWidth + lx - 1) / lx, ((GLuint)windowHeight + ly - 1) / ly, 1);
                     
-                    // Critical: Combined barrier for both next-step load and eventual fragment shader fetch
                     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
                     
                     std::swap(pingPongReadTex, pingPongWriteTex);
@@ -2659,6 +2673,7 @@ void App::renderScene()
                 stepsPerformed++;
             }
         }
+
     }
 
     if (useParticleMode)
@@ -2765,10 +2780,14 @@ void App::renderScene()
 
                 // Render pass
                 shader.use();
-                                if (useR8UIPingPong)
+                if (useR8UIPingPong)
                 {
                     glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
                     autoSetUniforms(shader, simulationTime, computeDt);
+
+                    // Re-add fallback uniforms for CA shaders (offset/scale) if not present in GUI
+                    if (dynamicUniforms.find("offset") == dynamicUniforms.end()) shader.setVec2("offset", 0.0f, 0.0f);
+                    if (dynamicUniforms.find("scale") == dynamicUniforms.end())  shader.setFloat("scale", 1.0f);
                 }
                 else
                 {
@@ -2776,6 +2795,7 @@ void App::renderScene()
                     glBindTexture(GL_TEXTURE_2D, pingPongReadTex);
                     autoSetUniforms(shader, simulationTime, computeDt);
                 }
+
 
 
                 // Set dynamic uniforms (GUI sliders)
