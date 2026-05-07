@@ -27,13 +27,19 @@ const char* App::defaultVertexShader = R"(
 layout(location = 0) in vec2 aPos;
 
 out vec2 uv;
+out vec2 texCoords;
+out vec4 vertTexCoord;
 
 void main()
 {
     uv = aPos * 0.5 + 0.5; // convert -1..1 → 0..1
+    texCoords = uv;
+    vertTexCoord = vec4(uv, 0.0, 1.0);
     gl_Position = vec4(aPos, 0.0, 1.0);
 }
 )";
+
+
 
 // Default fragment shader
 const char* App::defaultFragmentShader = R"(
@@ -1126,24 +1132,78 @@ void App::compileShader(bool resetParticles)
     // =========================
     // 1. Vertex / Fragment
     // =========================
+    // Auto-detect combined shaders in the compute editor
+    CombinedShaderSources combinedCheck = splitCombinedShaderSources(computeCode);
+    if (!combinedCheck.vertexSource.empty() && !combinedCheck.fragmentSource.empty())
+    {
+        useComputeShader = true;
+    }
+
     std::string vertexSource = vertexCode;
     std::string fragmentSource = fragmentCode;
-    bool extractedStages = false;
 
     if (useComputeShader)
     {
-        CombinedShaderSources combined = splitCombinedShaderSources(computeCode);
-        if (!combined.vertexSource.empty() && !combined.fragmentSource.empty())
+        if (!combinedCheck.vertexSource.empty() && !combinedCheck.fragmentSource.empty())
         {
-            vertexSource = combined.vertexSource;
-            fragmentSource = combined.fragmentSource;
-            vertexCode = combined.vertexSource;
-            fragmentCode = combined.fragmentSource;
-            extractedStages = true;
+            vertexSource = combinedCheck.vertexSource;
+            fragmentSource = combinedCheck.fragmentSource;
+            vertexCode = combinedCheck.vertexSource;
+            fragmentCode = combinedCheck.fragmentSource;
         }
     }
 
+
+        // Check if fragment shader lacks a version and seems to be old-style
+    if (fragmentSource.find("#version") == std::string::npos)
+    {
+        // 1. Handle common name collisions (like naming a sampler 'texture')
+        // We look for 'sampler2D texture' and rename it to 'u_texture'
+        size_t texVarPos = fragmentSource.find("sampler2D texture");
+        if (texVarPos != std::string::npos) {
+            // Check if it's 'texture' followed by a semicolon or space to be safe
+            size_t namePos = texVarPos + 10; // length of "sampler2D "
+            if (fragmentSource.substr(namePos, 7) == "texture") {
+                // Rename the declaration
+                fragmentSource.replace(namePos, 7, "u_texture");
+                
+                // Rename all occurrences of 'texture' used as a variable (heuristic)
+                // We look for 'texture' as a whole word not followed by '(' (which would be the function)
+                // but since we define texture2D -> texture, we just need to replace the variable name.
+                size_t p = 0;
+                while ((p = fragmentSource.find("texture", p)) != std::string::npos) {
+                    // If it's the one we just renamed or it's followed by '(' skip it
+                    bool isFunctionCall = (p + 7 < fragmentSource.size() && fragmentSource[p+7] == '(');
+                    if (isFunctionCall) {
+                        p += 7;
+                        continue;
+                    }
+                    
+                    // Check if it's a whole word
+                    bool prevAlpha = (p > 0 && isalnum(fragmentSource[p-1]));
+                    if (!prevAlpha) {
+                         fragmentSource.replace(p, 7, "u_texture");
+                    }
+                    p += 9; // move past 'u_texture'
+                }
+            }
+        }
+
+        std::string header = "#version 330 core\n";
+        header += "#define varying in\n";
+        header += "#define texture2D texture\n";
+        header += "#define gl_FragColor _fragColorOut\n";
+        header += "out vec4 _fragColorOut;\n";
+        
+        // Handle precision qualifiers which aren't in core but are in ES
+        header += "#define lowp\n#define mediump\n#define highp\n";
+
+        fragmentSource = header + fragmentSource;
+    }
+
+
     bool shaderOk = shader.compile(vertexSource, fragmentSource, compileError);
+
 
     std::ostringstream popup;
 
@@ -1507,12 +1567,15 @@ bool App::compileComputeShader(bool showPopup)
         // We detect this if we have binding 1 but we are NOT in particle mode.
         useIterativeEngine = (usesBinding1 || hasInitBlock) && !isParticleSimulation;
 
-        // usePingPong is a flag used in renderScene to decide which dispatch logic to use.
+                // usePingPong is a flag used in renderScene to decide which dispatch logic to use.
         // It should be true for both MOSFET (textures) and N-Body (SSBOs) if they have binding 1.
-        if (usesBinding1 != usePingPong || needsR8UI != useR8UIPingPong)
+        bool textureMissing = (!usesBinding1 && computeTexture == 0) || (usesBinding1 && pingPongReadTex == 0);
+
+        if (usesBinding1 != usePingPong || needsR8UI != useR8UIPingPong || textureMissing)
         {
             usePingPong = usesBinding1;
             useR8UIPingPong = needsR8UI;
+
 
             if (useIterativeEngine) internalSimTime = 0.0f;
         
@@ -2551,31 +2614,55 @@ void App::autoSetUniforms(const Shader& s, float timeVal, float dtVal)
         {
             s.setVec2(name, (float)windowWidth, (float)windowHeight);
         }
-        // --- Mouse Semantics ---
-        else if (name == "uMouse" || name == "u_mouse" || name == "iMouse" || name == "mouse")
+                // --- Mouse Semantics ---
+        else if (name == "uMouse" || name == "u_mouse" || name == "iMouse" || name == "mouse" || name == "ctr")
         {
-            s.setVec2(name, (float)mouseX, (float)mouseY);
+            s.setVec2(name, (float)mouseX / (float)windowWidth, 1.0f - (float)mouseY / (float)windowHeight);
         }
+
+
         // --- Delta Time Semantics ---
         else if (name == "dt" || name == "u_delta" || name == "iTimeDelta" || name == "u_delta_time")
         {
             s.setFloat(name, dtVal);
         }
                 // --- Channel semantics (textures) ---
-        else if (name == "iChannel0" || name == "u_texture0" || name == "densityTex" || name == "uTexture" || name == "currentState" || name == "u_state" || name == "cells")
+        else if (name == "iChannel0" || name == "u_texture0" || name == "densityTex" || name == "uTexture" || name == "currentState" || name == "u_state" || name == "cells" || name == "texture" || name == "tex")
         {
             s.setInt(name, 0); 
         }
+
+
         // --- CA/Coordinate Semantics ---
         else if (name == "scale")
         {
             if (dynamicUniforms.find("scale") == dynamicUniforms.end()) dynamicUniforms["scale"] = 1.0f;
         }
-        else if (name == "offset")
+        else if (name == "offset" && type == GL_FLOAT_VEC2)
         {
-             if (dynamicUniforms.find("offset") == dynamicUniforms.end()) dynamicUniforms["offset"] = 0.0f;
+            if (dynamicUniforms.find("offset") == dynamicUniforms.end()) dynamicUniforms["offset"] = 0.0f;
+        }
+        else if (name == "intense")
+        {
+            if (dynamicUniforms.find("intense") == dynamicUniforms.end()) dynamicUniforms["intense"] = 0.5f;
+        }
+        else if (name == "speed")
+        {
+            if (dynamicUniforms.find("speed") == dynamicUniforms.end()) dynamicUniforms["speed"] = 1.0f;
+        }
+        else if (name == "graininess")
+        {
+            s.setVec2(name, 0.7f, 0.7f);
+        }
+        else if (name == "dir")
+        {
+            // Default dir for some shaders is 2.0 (like (2*Sx-1))
+            if (dynamicUniforms.find("dir") == dynamicUniforms.end()) dynamicUniforms["dir"] = 2.0f;
         }
     }
+
+
+
 
     // --- Dynamic Uniform Sliders ---
     for (auto const& [name, value] : dynamicUniforms)
@@ -2860,14 +2947,20 @@ void App::renderScene()
                 if (err != GL_NO_ERROR)
                     std::cerr << "GL ERROR after compute: " << err << std::endl;
 
-                // Display the rgba32f texture via the blit shader
-                displayShader.use();
-                displayShader.setInt("uTexture", 0);
+                                // Use the main shader for the blit to allow custom post-processing
+                shader.use();
+                autoSetUniforms(shader, simulationTime, computeDt);
+                
+                // Set the input texture to unit 0
+                shader.setInt("uTexture", 0);
+                shader.setInt("tex", 0);
+
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, computeTexture);
+
             }
         }
-        else
+                else
         {
             shader.use();
             autoSetUniforms(shader, simulationTime, computeDt);
@@ -2878,11 +2971,13 @@ void App::renderScene()
             }
 
             glActiveTexture(GL_TEXTURE0);
-            if (useLogoAsChannel0 && logoLoaded && logoTexture != 0)
+            // Default to logo if it's loaded, as many "black" issues are due to unbound unit 0
+            if (logoLoaded && logoTexture != 0)
                 glBindTexture(GL_TEXTURE_2D, logoTexture);
             else
                 glBindTexture(GL_TEXTURE_2D, 0);
         }
+
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
