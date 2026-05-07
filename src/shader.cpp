@@ -222,4 +222,23 @@ int Shader::getUniformLocationCached(const std::string& name) const
     return loc;
 }
 
+std::unordered_map<std::string, unsigned int> Shader::getActiveUniforms() const
+{
+    std::unordered_map<std::string, unsigned int> uniforms;
+    if (!programID) return uniforms;
+
+    GLint count;
+    glGetProgramiv(programID, GL_ACTIVE_UNIFORMS, &count);
+
+    for (GLint i = 0; i < count; i++) {
+        char name[128];
+        GLsizei length;
+        GLint size;
+        GLenum type;
+        glGetActiveUniform(programID, i, sizeof(name), &length, &size, &type, name);
+        uniforms[std::string(name)] = (unsigned int)type;
+    }
+    return uniforms;
+}
+
 

@@ -1036,9 +1036,16 @@ void App::renderUI()
         if (ImGui::Button("Compile Compute"))
             compileComputeShader();
 
+            auto isSemanticUniform = [](const std::string& name) {
+                return name == "uTime" || name == "u_time" || name == "iTime" || name == "time" ||
+                   name == "uResolution" || name == "u_resolution" || name == "iResolution" || name == "resolution" ||
+                   name == "uMouse" || name == "u_mouse" || name == "iMouse" || name == "mouse" ||
+                   name == "dt" || name == "u_delta" || name == "iTimeDelta" || name == "u_delta_time" ||
+                   name == "scale" || name == "exposure" || name == "gamma";
+        };
+
         // --- Dynamic Uniform Sliders ---
         // Automatically find "uniform float [name];" in any shader stage.
-        // We exclude standard uniforms like uTime, iTime, dt, etc.
         auto extractUniforms = [&](const std::string& code) {
             size_t pos = 0;
             while ((pos = code.find("uniform float ", pos)) != std::string::npos) {
@@ -1055,8 +1062,7 @@ void App::renderUI()
                     while ((comma = name.find(',')) != std::string::npos) {
                         std::string sub = name.substr(0, comma);
                         sub.erase(sub.find_last_not_of(" \t\r\n") + 1);
-                        if (!sub.empty() && sub != "uTime" && sub != "iTime" && sub != "dt" && sub != "time" &&
-                            sub != "scale" && sub != "exposure" && sub != "gamma") 
+                        if (!sub.empty() && !isSemanticUniform(sub)) 
                         {
                             if (dynamicUniforms.find(sub) == dynamicUniforms.end()) dynamicUniforms[sub] = 0.5f;
                         }
@@ -1064,8 +1070,7 @@ void App::renderUI()
                         name.erase(0, name.find_first_not_of(" \t\r\n"));
                     }
 
-                    if (!name.empty() && name != "uTime" && name != "iTime" && name != "dt" && name != "time" &&
-                        name != "scale" && name != "exposure" && name != "gamma") 
+                    if (!name.empty() && !isSemanticUniform(name)) 
                     {
                         if (dynamicUniforms.find(name) == dynamicUniforms.end()) {
                             dynamicUniforms[name] = 0.5f;
@@ -2525,6 +2530,49 @@ void App::renderPlaybackBar()
     ImGui::PopFont(); 
 }
 
+void App::autoSetUniforms(const Shader& s, float timeVal, float dtVal)
+{
+    if (!s.isValid()) return;
+
+    auto active = s.getActiveUniforms();
+    double mouseX, mouseY;
+    glfwGetCursorPos(window, &mouseX, &mouseY);
+
+    for (auto const& [name, type] : active)
+    {
+        // --- Time Semantics ---
+        if (name == "uTime" || name == "u_time" || name == "iTime" || name == "time")
+        {
+            s.setFloat(name, timeVal);
+        }
+        // --- Resolution Semantics ---
+        else if (name == "uResolution" || name == "u_resolution" || name == "iResolution" || name == "resolution")
+        {
+            s.setVec2(name, (float)windowWidth, (float)windowHeight);
+        }
+        // --- Mouse Semantics ---
+        else if (name == "uMouse" || name == "u_mouse" || name == "iMouse" || name == "mouse")
+        {
+            s.setVec2(name, (float)mouseX, (float)mouseY);
+        }
+                // --- Delta Time Semantics ---
+        else if (name == "dt" || name == "u_delta" || name == "iTimeDelta" || name == "u_delta_time")
+        {
+            s.setFloat(name, dtVal);
+        }
+        // --- Channel semantics (textures) ---
+        else if (name == "iChannel0" || name == "u_texture0" || name == "densityTex" || name == "uTexture" || name == "currentState" || name == "u_state")
+        {
+            s.setInt(name, 0); // ActiveTexture(0)
+        }
+        // --- Dynamic Uniform Sliders ---
+        for (auto const& [name, value] : dynamicUniforms)
+        {
+            s.setFloat(name, value);
+        }
+    }
+}
+
 void App::renderScene()
 {
     if (windowWidth <= 0 || windowHeight <= 0)
@@ -2536,7 +2584,7 @@ void App::renderScene()
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-        bool renderOk = shaderValid;
+    bool renderOk = shaderValid;
     if (useComputeShader)
     {
         renderOk = renderOk && computeValid;
@@ -2548,8 +2596,8 @@ void App::renderScene()
     if (renderOk && useComputeShader && useIterativeEngine)
     {
         // Handle Rewind/Reset for iterative engine
-        // Added epsilon to prevent flickering from floating point precision jitter
-        if (simulationTime < internalSimTime - 0.0001f)
+        // Threshold adjusted to avoid false-positive resets when playback time is slightly behind internal clock
+        if (simulationTime < internalSimTime - 0.1f)
         {
             internalSimTime = 0.0f;
             needInitDispatch = true;
@@ -2580,8 +2628,7 @@ void App::renderScene()
                         else if (useDualComputeShader && initComputeValid)
                         {
                             initComputeShader.use();
-                            initComputeShader.setFloat("uTime", internalSimTime);
-                            initComputeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                            autoSetUniforms(initComputeShader, internalSimTime, stepSize);
 
                             glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, useR8UIPingPong ? GL_R8UI : GL_RGBA32F);
                             glDispatchCompute(((GLuint)windowWidth + 15) / 16, ((GLuint)windowHeight + 15) / 16, 1);
@@ -2592,10 +2639,7 @@ void App::renderScene()
                     }
 
                     computeShader.use();
-                                        computeShader.setFloat("uTime", internalSimTime);
-                    computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                    computeShader.setFloat("dt", stepSize);
-                    computeShader.setFloat("time", internalSimTime);
+                    autoSetUniforms(computeShader, internalSimTime, stepSize);
 
                     GLenum format = useR8UIPingPong ? GL_R8UI : GL_RGBA32F;
                     glBindImageTexture(0, pingPongReadTex,  0, GL_FALSE, 0, GL_READ_ONLY,  format);
@@ -2631,9 +2675,8 @@ void App::renderScene()
                     initComputeShader.use();
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
                     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, particleWriteBuffer);
-                    initComputeShader.setFloat("uTime", simulationTime);
-                    initComputeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                    initComputeShader.setFloat("dt", computeDt);
+                    autoSetUniforms(initComputeShader, simulationTime, computeDt);
+
                     initComputeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
                     initComputeShader.setFloat("gravityIntensity", 1.0f);
                     initComputeShader.setFloat("k", 0.1f);
@@ -2652,15 +2695,12 @@ void App::renderScene()
                         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleReadBuffer);
                         GLuint writeBuffer = particleWriteBuffer ? particleWriteBuffer : particleReadBuffer;
                         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, writeBuffer);
-                        computeShader.setFloat("uTime", simulationTime);
-                        computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
+                        autoSetUniforms(computeShader, simulationTime, computeDt);
+
                         computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
                         computeShader.setFloat("gravityIntensity", 1.0f);
                         computeShader.setFloat("k", 0.1f);
                         computeShader.setInt("increaseK", 0);
-                    
-                        // N-Body should always use the current simulation frame's dt
-                        computeShader.setFloat("dt", computeDt);
                     
                         glDispatchCompute((GLuint)updateDispatchCount, 1, 1);
                         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
@@ -2669,6 +2709,7 @@ void App::renderScene()
                         if (particleWriteBuffer && particleWriteBuffer != particleReadBuffer && isMoving)
                             std::swap(particleReadBuffer, particleWriteBuffer);
                     }
+
 
                 GLenum err = glGetError();
                 if (err != GL_NO_ERROR)
@@ -2680,10 +2721,7 @@ void App::renderScene()
             shader.use();
             shader.setMat4("viewProjection", glm::mat4(1.0f));
             shader.setVec3("baseColor", 1.0f, 1.0f, 1.0f);
-            shader.setFloat("uTime", simulationTime);
-            shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-            shader.setVec2("uMouse", 0.0f, 0.0f);
-            shader.setFloat("dt", computeDt);
+            autoSetUniforms(shader, simulationTime, computeDt);
 
             glBindVertexArray(particleVAO);
             glBindBuffer(GL_ARRAY_BUFFER, particleReadBuffer);
@@ -2725,55 +2763,41 @@ void App::renderScene()
                 // Note: The main simulation loop above now handles the high-speed steps.
                 // This section now only handles the render pass setup.
 
-                                // Render pass
-                                shader.use();
+                // Render pass
+                shader.use();
                                 if (useR8UIPingPong)
-                                {
-                                    glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
-                                    shader.setVec2("resolution", (float)windowWidth, (float)windowHeight);
-                    
-                                    // Added Game of Life uniforms
-                                    shader.setVec2("offset", 0.0f, 0.0f);
-                                    shader.setFloat("scale", 1.0f);
-                                }
-                                else
-                                {
-                                    glActiveTexture(GL_TEXTURE0);
-                                    glBindTexture(GL_TEXTURE_2D, pingPongReadTex);
-                    
-                                    // Added MOSFET/Texture-based uniforms for consistency
-                                    shader.setInt("densityTex", 0);
-                                    shader.setInt("iChannel0", 0);
+                {
+                    glBindImageTexture(0, pingPongReadTex, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R8UI);
+                    autoSetUniforms(shader, simulationTime, computeDt);
                 }
-                                shader.setFloat("uTime",     simulationTime);
-                                shader.setFloat("iTime",     simulationTime);
-                                shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                                shader.setVec2("iResolution", (float)windowWidth, (float)windowHeight);
-                                shader.setFloat("dt", computeDt);
+                else
+                {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, pingPongReadTex);
+                    autoSetUniforms(shader, simulationTime, computeDt);
+                }
 
-                                // Set dynamic uniforms
-                                for (auto const& [name, value] : dynamicUniforms) {
-                                    shader.setFloat(name, value);
-                                }
+
+                // Set dynamic uniforms (GUI sliders)
+                for (auto const& [name, value] : dynamicUniforms) {
+                    shader.setFloat(name, value);
+                }
             }
             else
             {
-                                // ---- standard rgba32f compute path ----
-                                CombinedShaderSources combined = splitCombinedShaderSources(computeCode);
-                                const std::string& updateSrc = combined.computeSources.updateSource;
+                // ---- standard rgba32f compute path ----
+                CombinedShaderSources combined = splitCombinedShaderSources(computeCode);
+                const std::string& updateSrc = combined.computeSources.updateSource;
 
-                                computeShader.use();
-                                computeShader.setFloat("uTime", simulationTime);
-                                computeShader.setFloat("iTime", simulationTime);
-                                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                                computeShader.setVec2("iResolution", (float)windowWidth, (float)windowHeight);
-                
-                                // Set dynamic uniforms in compute
-                                for (auto const& [name, value] : dynamicUniforms) {
-                                    computeShader.setFloat(name, value);
-                                }
+                computeShader.use();
+                autoSetUniforms(computeShader, simulationTime, computeDt);
 
-                                bool bindComputeTextureToBoth = computeSourceUsesWriteBinding1(updateSrc);
+                // Set dynamic uniforms in compute
+                for (auto const& [name, value] : dynamicUniforms) {
+                    computeShader.setFloat(name, value);
+                }
+
+                bool bindComputeTextureToBoth = computeSourceUsesWriteBinding1(updateSrc);
                 if (bindComputeTextureToBoth)
                 {
                     glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_READ_ONLY,  GL_RGBA32F);
@@ -2784,13 +2808,10 @@ void App::renderScene()
                     glBindImageTexture(0, computeTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
                 }
 
-                computeShader.setFloat("uTime", simulationTime);
-                computeShader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
                 computeShader.setVec3("gravityCenter", 0.0f, 0.0f, 0.0f);
                 computeShader.setFloat("gravityIntensity", 1.0f);
                 computeShader.setFloat("k", 0.1f);
                 computeShader.setInt("increaseK", 0);
-                computeShader.setFloat("dt", computeDt);
 
                 // Default tone-mapping parameters for shaders that expect them.
                 computeShader.setFloat("exposure", 1.0f);
@@ -2798,6 +2819,7 @@ void App::renderScene()
                 computeShader.setInt("toneMappingType", 2);
                 computeShader.setInt("toneMappingOnRGB", 1);
                 computeShader.setFloat("gamma", 2.2f);
+
 
                 glDispatchCompute(
                     (GLuint)(windowWidth  + 15) / 16,
@@ -2817,24 +2839,17 @@ void App::renderScene()
                 glBindTexture(GL_TEXTURE_2D, computeTexture);
             }
         }
-                else
-                {
-                    shader.use();
-                    shader.setFloat("uTime", simulationTime);
-                    shader.setFloat("iTime", simulationTime);
-                    shader.setVec2("uResolution", (float)windowWidth, (float)windowHeight);
-                    shader.setVec2("iResolution", (float)windowWidth, (float)windowHeight);
-                    shader.setVec2("uMouse", 0.0f, 0.0f);
-                    shader.setVec2("iMouse", 0.0f, 0.0f);
-                    shader.setFloat("dt", computeDt);
-                    shader.setInt("iChannel0", 0);
+        else
+        {
+            shader.use();
+            autoSetUniforms(shader, simulationTime, computeDt);
 
-                    // Set dynamic uniforms
-                    for (auto const& [name, value] : dynamicUniforms) {
-                        shader.setFloat(name, value);
-                    }
+            // Set dynamic uniforms
+            for (auto const& [name, value] : dynamicUniforms) {
+                shader.setFloat(name, value);
+            }
 
-                    glActiveTexture(GL_TEXTURE0);
+            glActiveTexture(GL_TEXTURE0);
             if (useLogoAsChannel0 && logoLoaded && logoTexture != 0)
                 glBindTexture(GL_TEXTURE_2D, logoTexture);
             else
@@ -2843,19 +2858,6 @@ void App::renderScene()
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
     }
-    else
-    {
-        displayShader.use();
-        displayShader.setInt("uTexture", 0);
-        glActiveTexture(GL_TEXTURE0);
-        if (logoLoaded && logoTexture != 0)
-            glBindTexture(GL_TEXTURE_2D, logoTexture);
-        else
-            glBindTexture(GL_TEXTURE_2D, errorTexture);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-    }
-
-    glBindVertexArray(0);
 }
 
 void App::updateBuffers()

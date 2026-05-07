@@ -72,10 +72,10 @@ private:
     void createFBO(GLuint& fbo, GLuint& tex);
     void destroyFBO(GLuint& fbo, GLuint& tex);
     void handleResize();
-        static std::filesystem::path getExecutableDirectory();
+    static std::filesystem::path getExecutableDirectory();
     void requestShutdown();
     void toggleFullscreen();
-
+    void autoSetUniforms(const Shader& s, float timeVal, float dtVal);
     // GLFW
     GLFWwindow* window;
     int windowWidth;

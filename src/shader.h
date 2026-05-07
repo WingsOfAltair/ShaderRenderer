@@ -19,6 +19,7 @@ public:
     void setVec4(const std::string& name, float x, float y, float z, float w) const;
     void setMat4(const std::string& name, const glm::mat4& value) const;
     int getUniformLocation(const std::string& name) const;
+    std::unordered_map<std::string, unsigned int> getActiveUniforms() const;
 
     unsigned int getID() const { return programID; }
     bool isValid() const { return programID != 0; }
